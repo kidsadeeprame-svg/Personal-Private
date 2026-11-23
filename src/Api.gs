@@ -61,12 +61,15 @@ const API_ = {
   saveInstallment: apiSaveInstallment_,
   deleteInstallment: apiDeleteInstallment_,
   postInstallments: apiPostInstallments_,
+  savePlanItem: apiSavePlanItem_,
+  deletePlanItem: apiDeletePlanItem_,
 };
 
 const WRITE_APIS_ = ['saveTransaction', 'deleteTransaction', 'saveRecurring', 'deleteRecurring', 'postRecurring',
   'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'saveLoan', 'deleteLoan',
   'savePayment', 'deletePayment', 'saveTax', 'saveVisit', 'deleteVisit', 'saveTable',
-  'savePlanCell', 'resetPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments'];
+  'savePlanCell', 'resetPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments',
+  'savePlanItem', 'deletePlanItem'];
 
 function api(name, argsJson) {
   guard_();
@@ -535,7 +538,7 @@ function apiDeleteVisit_(id) {
 /* ============ ตั้งค่า ============ */
 
 const EDITABLE_TABLES_ = ['categories', 'accounts', 'funds', 'healthItems', 'taxBrackets', 'config'];
-const HIDDEN_CONFIG_ = ['USD_THB', 'DRIVE_FOLDER_ID', 'IMPORT_DONE', 'PLAN_IMPORT_DONE'];
+const HIDDEN_CONFIG_ = ['USD_THB', 'DRIVE_FOLDER_ID', 'IMPORT_DONE', 'PLAN_IMPORT_DONE', 'SCHEMA_VERSION'];
 
 function apiGetTable_(key) {
   if (EDITABLE_TABLES_.indexOf(key) < 0) throw new Error('แก้ไขตารางนี้ไม่ได้');

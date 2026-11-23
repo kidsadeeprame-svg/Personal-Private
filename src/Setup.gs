@@ -124,9 +124,15 @@ function ensureReady_() {
   const missing = Object.keys(SHEETS).some(k => !ss.getSheetByName(SHEETS[k].name));
   if (missing) ensureSheets_();
   if (!ss.getSheetByName(SHEETS.config.name)) return;
-  const have = readTable_('config').map(r => r.Key);
+  const rows = readTable_('config');
+  const have = rows.map(r => r.Key);
   const add = DEFAULTS.config.filter(r => have.indexOf(r.Key) < 0);
   if (add.length) appendRows_('config', add);
+  const ver = rows.find(r => r.Key === 'SCHEMA_VERSION');
+  if (!ver || Number(ver.Value) !== SCHEMA_VERSION) {
+    if (!missing) ensureSheets_(); // เขียนหัวคอลัมน์ใหม่ (เช่น คอลัมน์ที่เพิ่มเข้ามา)
+    setConfig_('SCHEMA_VERSION', SCHEMA_VERSION);
+  }
 }
 
 function setConfig_(key, value) {

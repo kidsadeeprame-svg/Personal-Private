@@ -1039,15 +1039,30 @@ async function planMonthHtml() {
   const toolbar = '<span class="small muted">เริ่ม</span><input type="month" id="pl-start" value="' + start + '">' +
     '<select id="pl-count">' + opts([{ value: 6, label: '6 เดือน' }, { value: 12, label: '12 เดือน' }, { value: 24, label: '24 เดือน' }], count) + '</select>' +
     (p.planImportDone ? '' : '<button class="btn" id="pl-import">นำเข้าแผนจาก Expen Life</button>');
+  const S_open = S.planOpen = S.planOpen || {};
+  const cellHtml = (r, c, j) => c.readonly
+    ? '<span class="pl-ro' + (r.hasItems ? ' pl-sum' : ' muted') + '" data-r="' + r.idx + '" data-c="' + j + '">' + (c.v ? fmt(c.v, 0) : '-') + '</span>'
+    : '<input class="pl-cell' + (c.own ? ' own' : '') + '" data-r="' + r.idx + '" data-c="' + j + '" value="' + (c.v ? Math.round(c.v * 100) / 100 : '') + '" placeholder="' + (c.def ? fmt(c.def, 0) : '0') + '" title="' +
+      (c.own ? 'แก้เอง' + (c.src === 'import' ? ' (นำเข้าจาก Expen Life)' : '') + ' · ค่าตั้งต้น ' + fmt(c.def) + ' · ลบตัวเลขเพื่อกลับไปใช้ค่าตั้งต้น' : 'ค่าตั้งต้น') + '">';
+  const rowHtml = (r, extraCls, name) => '<tr class="' + (extraCls || '') + '"><td class="pl-name">' + name + '</td>' +
+    r.cells.map((c, j) => '<td class="num">' + cellHtml(r, c, j) + '</td>').join('') + '<td class="num pl-rowsum" data-r="' + r.idx + '"></td></tr>';
   const section = (title, type, cls) => {
     const rows = p.rows.map((r, i) => Object.assign({ idx: i }, r)).filter(r => r.type === type);
-    return '<tr class="pl-sec"><td colspan="' + (p.months.length + 2) + '"><b class="' + cls + '">' + title + '</b></td></tr>' +
-      rows.map(r => '<tr><td class="pl-name' + (r.installment ? ' muted' : '') + '">' + (r.installment ? '&nbsp;&nbsp;↳ ' : '') + esc(rowLabel(r)) + '</td>' +
-        r.cells.map((c, j) => '<td class="num">' + (c.readonly
-          ? '<span class="muted">' + (c.v ? fmt(c.v, 0) : '-') + '</span>'
-          : '<input class="pl-cell' + (c.own ? ' own' : '') + '" data-r="' + r.idx + '" data-c="' + j + '" value="' + (c.v ? Math.round(c.v * 100) / 100 : '') + '" placeholder="' + (c.def ? fmt(c.def, 0) : '0') + '" title="' +
-            (c.own ? 'แก้เอง' + (c.src === 'import' ? ' (นำเข้าจาก Expen Life)' : '') + ' · ค่าตั้งต้น ' + fmt(c.def) + ' · ลบตัวเลขเพื่อกลับไปใช้ค่าตั้งต้น' : 'ค่าตั้งต้น') + '">') + '</td>').join('') +
-        '<td class="num pl-rowsum" data-r="' + r.idx + '"></td></tr>').join('');
+    let out = '<tr class="pl-sec"><td colspan="' + (p.months.length + 2) + '"><b class="' + cls + '">' + title + '</b></td></tr>';
+    rows.forEach(r => {
+      if (r.installment) { out += rowHtml(r, 'muted', '&nbsp;&nbsp;↳ ' + esc(rowLabel(r))); return; }
+      if (r.sub) return;
+      const key = r.type + '|' + r.category;
+      const open = !!S_open[key];
+      const subs = rows.filter(x => x.sub && x.category === r.category);
+      out += rowHtml(r, 'pl-cat', '<a class="pl-toggle" data-key="' + esc(key) + '" title="กดเพื่อ' + (open ? 'ซ่อน' : 'ดู/เพิ่ม') + 'รายการย่อย">' + (open ? '▾' : '▸') + ' ' + esc(r.category) +
+        (subs.length ? ' <span class="badge">' + subs.length + '</span>' : '') + '</a>');
+      if (!open) return;
+      subs.forEach(x => { out += rowHtml(x, 'pl-subrow', '<a class="pl-item" data-id="' + esc(x.itemId) + '" title="แก้ไข/ลบรายการย่อย">↳ ' + esc(x.item) + '</a>'); });
+      out += '<tr class="pl-subrow"><td colspan="' + (p.months.length + 2) + '"><a class="pl-additem small" data-type="' + esc(r.type) + '" data-cat="' + esc(r.category) + '">＋ เพิ่มรายการย่อยใน ' + esc(r.category) + '</a>' +
+        (!subs.length ? ' <span class="muted small">(เมื่อมีรายการย่อย ยอดของหมวดจะเท่ากับผลรวมรายการย่อย)</span>' : '') + '</td></tr>';
+    });
+    return out;
   };
   const html = '<div class="panel" id="pl-alert" style="margin-bottom:16px"></div>' +
     '<div class="panel" style="margin-bottom:16px"><div class="table-wrap" style="max-height:none"><table class="data plan-grid"><thead><tr><th>หมวด</th>' +
@@ -1069,6 +1084,12 @@ async function planMonthHtml() {
       if (imp) imp.addEventListener('click', () => confirmAction('นำเข้าแผน 12 เดือนข้างหน้าจากแท็บ Expen Life และ Income? (ช่องที่แก้เองไว้แล้วจะไม่ถูกทับ)', async () => {
         toast(await api('importPlan')); refresh();
       }));
+      $$('.pl-toggle').forEach(a => a.addEventListener('click', () => { S.planOpen[a.dataset.key] = !S.planOpen[a.dataset.key]; refresh(); }));
+      $$('.pl-additem').forEach(a => a.addEventListener('click', () => planItemModal({ Type: a.dataset.type, Category: a.dataset.cat })));
+      $$('.pl-item').forEach(a => a.addEventListener('click', () => {
+        const r = S.planData.rows.find(x => x.itemId === a.dataset.id);
+        planItemModal({ ID: r.itemId, Type: r.type, Category: r.category, Name: r.item, DefaultAmount: r.cells[0].def });
+      }));
       $$('.pl-cell').forEach(inp => {
         inp.addEventListener('focus', () => inp.select());
         inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
@@ -1080,7 +1101,7 @@ async function planMonthHtml() {
           if (clear) { c.src = ''; inp.value = c.def ? c.def : ''; }
           inp.classList.toggle('own', c.own);
           planRecalc();
-          try { await api('savePlanCell', S.planData.months[+inp.dataset.c], r.type, r.category, clear ? '' : num(raw)); }
+          try { await api('savePlanCell', S.planData.months[+inp.dataset.c], r.type, r.category, clear ? '' : num(raw), r.item || ''); }
           catch (e) { toast(errMsg(e), true); }
         });
       });
@@ -1093,16 +1114,22 @@ async function planMonthHtml() {
 function planRecalc() {
   const p = S.planData;
   // เงินออมที่ยังไม่แก้เอง = % ของรายรับ
-  const savingRow = p.rows.find(r => r.type === PLAN_SAVING_TYPE);
-  const sumType = (type, j) => p.rows.filter(r => r.type === type).reduce((a, r) => a + r.cells[j].v, 0);
-  p.months.forEach((m, j) => {
+  // แถวหมวดที่มีรายการย่อย = ผลรวมรายการย่อย
+  p.rows.filter(r => r.hasItems).forEach(r => {
+    const subs = p.rows.filter(x => x.sub && x.type === r.type && x.category === r.category);
+    r.cells.forEach((c, j) => { c.v = subs.reduce((a, x) => a + x.cells[j].v, 0); });
+  });
+  const sumType = (type, j) => p.rows.filter(r => r.type === type && !r.sub).reduce((a, r) => a + r.cells[j].v, 0);
+  const savingRow = p.rows.find(r => r.type === PLAN_SAVING_TYPE && !r.sub);
+  if (!savingRow.hasItems) p.months.forEach((m, j) => {
     const c = savingRow.cells[j];
     c.def = Math.round(sumType(INCOME, j) * p.savingPct) / 100;
     if (!c.own) c.v = c.def;
   });
+  $$('.pl-sum').forEach(sp => { const v = p.rows[+sp.dataset.r].cells[+sp.dataset.c].v; sp.textContent = v ? fmt(v, 0) : '-'; });
   $$('.pl-cell').forEach(inp => {
     const r = p.rows[+inp.dataset.r];
-    if (r.type !== PLAN_SAVING_TYPE) return;
+    if (r.type !== PLAN_SAVING_TYPE || r.sub) return;
     const c = r.cells[+inp.dataset.c];
     if (!c.own && document.activeElement !== inp) inp.value = c.v ? Math.round(c.v * 100) / 100 : '';
     inp.placeholder = fmt(c.def, 0);
@@ -1137,6 +1164,30 @@ function planRecalc() {
       ],
     },
     options: { maintainAspectRatio: false, animation: false, scales: { y: { ticks: moneyTick } }, plugins: { tooltip: moneyTooltip } },
+  });
+}
+
+function planItemModal(it) {
+  const isNew = !it.ID;
+  openModal({
+    title: (isNew ? 'เพิ่มรายการย่อย' : 'แก้ไขรายการย่อย') + ' · ' + it.Category,
+    body: '<div class="form-grid">' +
+      field('ชื่อรายการย่อย', '<input name="Name" value="' + esc(it.Name || '') + '" placeholder="เช่น โทรศัพท์เปรม">', 'full') +
+      field('จำนวนต่อเดือน (ค่าตั้งต้นทุกเดือน)', '<input type="number" step="0.01" name="DefaultAmount" value="' + esc(isNew ? '' : it.DefaultAmount) + '">', 'full') +
+      '<p class="full muted small" style="margin:0">ตัวเลขนี้ใช้ทุกเดือน แก้รายเดือนได้ในตาราง · ยอดของหมวด ' + esc(it.Category) + ' จะเท่ากับผลรวมรายการย่อย</p>' +
+      (isNew ? '' : '<div class="full"><button type="button" class="btn danger sm" id="pi-del">ลบรายการย่อยนี้</button></div>') + '</div>',
+    onOpen: root => {
+      const del = $('#pi-del', root);
+      if (del) del.addEventListener('click', () => confirmAction('ลบรายการย่อย "' + it.Name + '" และตัวเลขที่แก้ไว้ทุกเดือน?', async () => {
+        await api('deletePlanItem', it.ID); closeModal(); toast('ลบแล้ว'); refresh();
+      }));
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      await api('savePlanItem', { ID: it.ID, Type: it.Type, Category: it.Category, Name: f.Name, DefaultAmount: num(f.DefaultAmount) });
+      S.planOpen[it.Type + '|' + it.Category] = true;
+      toast('บันทึกแล้ว'); refresh();
+    },
   });
 }
 

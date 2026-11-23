@@ -117,6 +117,13 @@ table.data tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
 .pl-cell:hover { border-color: var(--line); }
 .pl-cell.own { color: var(--text); font-weight: 600; }
 .plan-grid tfoot td { white-space: nowrap; }
+.pl-toggle, .pl-item, .pl-additem { cursor: pointer; color: inherit; text-decoration: none; }
+.pl-toggle:hover, .pl-item:hover, .pl-additem:hover { color: var(--primary); }
+.pl-additem { color: var(--primary); }
+.plan-grid tr.pl-subrow td { background: var(--bg); }
+.plan-grid tr.pl-subrow .pl-name { background: var(--bg); padding-left: 22px; }
+.pl-sum { font-weight: 600; padding-right: 6px; }
+.pl-ro { padding-right: 6px; }
 
 @media (max-width: 720px) {
   .sidebar { width: 60px; padding: 10px 6px; } .sidebar span { display: none; } .brand { padding: 4px 8px 12px; }

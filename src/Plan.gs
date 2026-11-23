@@ -130,17 +130,26 @@ function apiPostInstallments_(ids, month, amounts) {
 
 /* ---------- แผนรายเดือน ---------- */
 
+/** key = เดือน|ประเภท|หมวด|รายการย่อย ('' = ทั้งหมวด) */
 function planOverrides_() {
   const o = {};
   readTable_('plan').forEach(p => {
-    o[monthStr_(p.Month) + '|' + p.Type + '|' + p.Category] = { amount: num_(p.Amount), source: String(p.Source || '') };
+    o[monthStr_(p.Month) + '|' + p.Type + '|' + p.Category + '|' + String(p.Item || '')] = { amount: num_(p.Amount), source: String(p.Source || '') };
   });
   return o;
 }
 
+function planItems_() {
+  return readTable_('planItems').filter(i => isActive_(i.Active)).map(i => ({
+    ID: String(i.ID), Type: i.Type, Category: String(i.Category), Name: String(i.Name),
+    DefaultAmount: num_(i.DefaultAmount), Order: num_(i.Order),
+  })).sort((a, b) => a.Order - b.Order || a.Name.localeCompare(b.Name));
+}
+
 /**
  * คำนวณแผนของหลายเดือน
- * คืน { months, savingPct, rows:[{type, category, label?, installment?, cells:[{v, def, own, readonly?}]}] }
+ * คืน { months, savingPct, rows:[{type, category, label?, installment?, item?, sub?, parent?, hasItems?, cells:[{v, def, own, readonly?}]}] }
+ * แถว sub = รายการย่อย (ไม่นับซ้ำในยอดรวม — แถวหมวดแม่คือผลรวมของรายการย่อย)
  */
 function buildPlan_(months) {
   const s = planSettings_();
@@ -150,42 +159,54 @@ function buildPlan_(months) {
   const rec = readTable_('recurring').filter(r => isActive_(r.Active));
   const inst = installments_();
   const ov = planOverrides_();
+  const items = planItems_();
 
   const incomeCats = cats.filter(c => c.Type === INCOME).map(c => String(c.Name));
   const expenseCats = cats.filter(c => c.Type === EXPENSE).map(c => String(c.Name));
   if (base && incomeCats.indexOf(SALARY_CATEGORY) < 0) incomeCats.unshift(SALARY_CATEGORY);
   if (base && s.bonusMonths && incomeCats.indexOf(BONUS_CATEGORY) < 0) incomeCats.splice(1, 0, BONUS_CATEGORY);
-  // หมวดที่มีแต่ในแผนที่แก้เอง/นำเข้า
-  Object.keys(ov).forEach(k => {
-    const parts = k.split('|');
-    if (months.indexOf(parts[0]) < 0) return;
-    if (parts[1] === INCOME && incomeCats.indexOf(parts[2]) < 0) incomeCats.push(parts[2]);
-    if (parts[1] === EXPENSE && expenseCats.indexOf(parts[2]) < 0) expenseCats.push(parts[2]);
-  });
+  // หมวดที่มีแต่ในแผนที่แก้เอง/นำเข้า หรือมีรายการย่อย
+  const addCat = (type, cat) => {
+    if (type === INCOME && incomeCats.indexOf(cat) < 0) incomeCats.push(cat);
+    if (type === EXPENSE && expenseCats.indexOf(cat) < 0) expenseCats.push(cat);
+  };
+  Object.keys(ov).forEach(k => { const p = k.split('|'); if (months.indexOf(p[0]) >= 0) addCat(p[1], p[2]); });
+  items.forEach(i => addCat(i.Type, i.Category));
   const budget = {};
   cats.filter(c => c.Type === EXPENSE).forEach(c => { budget[String(c.Name)] = num_(c.MonthlyBudget); });
   const recSum = (type, cat) => rec.filter(r => r.Type === type && String(r.Category) === cat).reduce((a, r) => a + num_(r.Amount), 0);
 
-  const cell = (m, type, cat, def) => {
-    const o = ov[m + '|' + type + '|' + cat];
+  const cell = (m, type, cat, def, item) => {
+    const o = ov[m + '|' + type + '|' + cat + '|' + (item || '')];
     return o ? { v: o.amount, def: round2_(def), own: true, src: o.source } : { v: round2_(def), def: round2_(def), own: false };
   };
 
-  const incomeRows = incomeCats.map(cat => ({
-    type: INCOME, category: cat,
-    cells: months.map(m => {
-      let def;
-      if (cat === SALARY_CATEGORY && base) def = salaryAt_(s, base, m);
-      else if (cat === BONUS_CATEGORY && base) def = (+m.slice(5, 7) === s.bonusMonth ? s.bonusMonths * salaryAt_(s, base, m) : 0) + recSum(INCOME, cat);
-      else def = recSum(INCOME, cat);
-      return cell(m, INCOME, cat, def);
-    }),
-  }));
+  /** แถวหมวด + รายการย่อย (ถ้ามี) */
+  const catRows = (type, cat, defFn) => {
+    const subs = items.filter(i => i.Type === type && i.Category === cat);
+    if (!subs.length) return [{ type, category: cat, cells: months.map(m => cell(m, type, cat, defFn(m))) }];
+    const subRows = subs.map(i => ({
+      type, category: cat, item: i.Name, itemId: i.ID, sub: true,
+      cells: months.map(m => cell(m, type, cat, i.DefaultAmount, i.Name)),
+    }));
+    const parent = {
+      type, category: cat, hasItems: true,
+      cells: months.map((m, j) => {
+        const v = subRows.reduce((a, r) => a + r.cells[j].v, 0), def = subRows.reduce((a, r) => a + r.cells[j].def, 0);
+        return { v: round2_(v), def: round2_(def), own: false, readonly: true };
+      }),
+    };
+    return [parent].concat(subRows);
+  };
+  const flat = arr => arr.reduce((a, x) => a.concat(x), []);
 
-  const expenseRows = expenseCats.map(cat => ({
-    type: EXPENSE, category: cat,
-    cells: months.map(m => cell(m, EXPENSE, cat, budget[cat] > 0 ? budget[cat] : recSum(EXPENSE, cat))),
-  }));
+  const incomeRows = flat(incomeCats.map(cat => catRows(INCOME, cat, m => {
+    if (cat === SALARY_CATEGORY && base) return salaryAt_(s, base, m);
+    if (cat === BONUS_CATEGORY && base) return (+m.slice(5, 7) === s.bonusMonth ? s.bonusMonths * salaryAt_(s, base, m) : 0) + recSum(INCOME, cat);
+    return recSum(INCOME, cat);
+  })));
+
+  const expenseRows = flat(expenseCats.map(cat => catRows(EXPENSE, cat, () => (budget[cat] > 0 ? budget[cat] : recSum(EXPENSE, cat)))));
 
   // งวดผ่อน: งวดที่บันทึกจ่ายจริงแล้วยังนับในแผนของเดือนนั้น (เพื่อเทียบแผน vs จริง) จนกว่าจะผ่อนครบ
   const instRows = inst.filter(i => months.some(m => installmentActive_(i, m))).map(i => ({
@@ -196,23 +217,18 @@ function buildPlan_(months) {
     }),
   }));
 
-  const savingRow = {
-    type: PLAN_SAVING_TYPE, category: PLAN_SAVING,
-    cells: months.map((m, i) => {
-      const inc = incomeRows.reduce((a, r) => a + r.cells[i].v, 0);
-      return cell(m, PLAN_SAVING_TYPE, PLAN_SAVING, inc * s.savingPct / 100);
-    }),
-  };
+  const incomeTotal = j => incomeRows.filter(r => !r.sub).reduce((a, r) => a + r.cells[j].v, 0);
+  const savingRows = catRows(PLAN_SAVING_TYPE, PLAN_SAVING, m => incomeTotal(months.indexOf(m)) * s.savingPct / 100);
 
   return {
     months, savingPct: s.savingPct,
-    rows: incomeRows.concat(expenseRows, instRows, [savingRow]),
+    rows: incomeRows.concat(expenseRows, instRows, savingRows),
   };
 }
 
 function planTotals_(plan) {
   return plan.months.map((m, i) => {
-    const sum = type => plan.rows.filter(r => r.type === type).reduce((a, r) => a + r.cells[i].v, 0);
+    const sum = type => plan.rows.filter(r => r.type === type && !r.sub).reduce((a, r) => a + r.cells[i].v, 0);
     const income = sum(INCOME), expense = sum(EXPENSE), saving = sum(PLAN_SAVING_TYPE);
     return { month: m, income: round2_(income), expense: round2_(expense), saving: round2_(saving), remaining: round2_(income - expense - saving) };
   });
@@ -227,16 +243,53 @@ function apiPlan_(start, count) {
   return plan;
 }
 
-/** แก้ช่องแผน 1 ช่อง: amount = '' คือกลับไปใช้ค่าตั้งต้น */
-function apiSavePlanCell_(month, type, category, amount) {
+/** แก้ช่องแผน 1 ช่อง: amount = '' คือกลับไปใช้ค่าตั้งต้น · item = ชื่อรายการย่อย ('' = ทั้งหมวด) */
+function apiSavePlanCell_(month, type, category, amount, item) {
   month = monthStr_(month);
+  item = String(item || '');
   if (!month || !category) throw new Error('ข้อมูลไม่ครบ');
   if ([INCOME, EXPENSE, PLAN_SAVING_TYPE].indexOf(type) < 0) throw new Error('ประเภทไม่ถูกต้อง');
-  deleteWhere_('plan', r => monthStr_(r.Month) === month && r.Type === type && String(r.Category) === category);
+  deleteWhere_('plan', r => monthStr_(r.Month) === month && r.Type === type && String(r.Category) === category && String(r.Item || '') === item);
   if (amount !== '' && amount !== null && amount !== undefined) {
-    appendRows_('plan', [{ Month: month, Type: type, Category: category, Amount: num_(amount), Source: 'manual' }]);
+    appendRows_('plan', [{ Month: month, Type: type, Category: category, Amount: num_(amount), Source: 'manual', Item: item }]);
   }
   return true;
+}
+
+/* ---------- รายการย่อยในแผน ---------- */
+
+/** {ID?, Type, Category, Name, DefaultAmount} */
+function apiSavePlanItem_(i) {
+  const name = String(i.Name || '').trim();
+  if (!name) throw new Error('กรุณาใส่ชื่อรายการย่อย');
+  if ([INCOME, EXPENSE, PLAN_SAVING_TYPE].indexOf(i.Type) < 0 || !i.Category) throw new Error('ข้อมูลไม่ครบ');
+  const all = readTable_('planItems');
+  const dup = all.find(r => r.Type === i.Type && String(r.Category) === i.Category && String(r.Name) === name && String(r.ID) !== String(i.ID || ''));
+  if (dup) throw new Error('มีรายการย่อยชื่อนี้ในหมวดนี้แล้ว');
+  const row = { Type: i.Type, Category: i.Category, Name: name, DefaultAmount: num_(i.DefaultAmount), Active: true };
+  if (i.ID) {
+    const old = all.find(r => String(r.ID) === String(i.ID));
+    if (!old) throw new Error('ไม่พบรายการย่อย');
+    if (String(old.Name) !== name) {
+      // เปลี่ยนชื่อ: ย้ายตัวเลขที่แก้เองไว้ไปชื่อใหม่
+      const sh = sheet_('plan');
+      const col = SHEETS.plan.headers.indexOf('Item') + 1;
+      readTable_('plan').filter(r => r.Type === old.Type && String(r.Category) === String(old.Category) && String(r.Item || '') === String(old.Name))
+        .forEach(r => sh.getRange(r._row, col).setValue(name));
+    }
+    return updateById_('planItems', 'ID', i.ID, row);
+  }
+  row.ID = newId_('PI');
+  row.Order = all.filter(r => r.Type === i.Type && String(r.Category) === i.Category).length + 1;
+  appendRows_('planItems', [row]);
+  return row;
+}
+
+function apiDeletePlanItem_(id) {
+  const it = readTable_('planItems').find(r => String(r.ID) === String(id));
+  if (!it) return 0;
+  deleteWhere_('plan', r => r.Type === it.Type && String(r.Category) === String(it.Category) && String(r.Item || '') === String(it.Name));
+  return deleteWhere_('planItems', r => String(r.ID) === String(id));
 }
 
 /** ล้างค่าที่แก้เองของทั้งเดือน (กลับไปใช้ค่าตั้งต้น) */
@@ -258,7 +311,7 @@ function apiPlanVsActual_(period) {
   const agg = aggregateByMonth_();
   const rows = {};
   const key = (t, c) => t + '|' + c;
-  plan.rows.forEach(r => {
+  plan.rows.filter(r => !r.sub).forEach(r => {
     const k = key(r.type, r.category);
     rows[k] = rows[k] || { type: r.type, category: r.category, plan: 0, actual: 0 };
     rows[k].plan += r.cells.reduce((a, c) => a + c.v, 0);
@@ -366,9 +419,9 @@ function importLegacyPlan() {
       }
     }
     const existing = planOverrides_();
-    const rows = Object.keys(sums).filter(k => !existing[k]).map(k => {
+    const rows = Object.keys(sums).filter(k => !existing[k + '|']).map(k => {
       const p = k.split('|');
-      return { Month: p[0], Type: p[1], Category: p[2], Amount: round2_(sums[k]), Source: 'import' };
+      return { Month: p[0], Type: p[1], Category: p[2], Amount: round2_(sums[k]), Source: 'import', Item: '' };
     });
     appendRows_('plan', rows);
     setConfig_('PLAN_IMPORT_DONE', Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'));
