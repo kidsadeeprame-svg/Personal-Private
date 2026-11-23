@@ -24,7 +24,15 @@ const truthy = v => v === true || String(v).toUpperCase() === 'TRUE';
 function monthLabel(m) { if (!m) return ''; return TH_MONTHS[+m.slice(5, 7) - 1] + ' ' + (+m.slice(0, 4) + 543 - 2500); }
 function dateLabel(d) { if (!d) return ''; return +d.slice(8, 10) + ' ' + TH_MONTHS[+d.slice(5, 7) - 1] + ' ' + (+d.slice(0, 4) + 543 - 2500); }
 const today = () => S.boot.today;
-const thisMonth = () => S.boot.today.slice(0, 7);
+const thisMonth = () => S.boot.cycleMonth || S.boot.today.slice(0, 7);
+/** ช่วงวันที่ของรอบเดือน เช่น "27 พ.ย. – 26 ธ.ค." (ว่างถ้าใช้เดือนปฏิทิน) */
+function cycleRangeLabel(m) {
+  const s = S.boot && S.boot.cycleStart;
+  if (!m || !s || s <= 1) return '';
+  const y = +m.slice(0, 4), mo = +m.slice(5, 7);
+  const prev = new Date(y, mo - 2, 1);
+  return s + ' ' + TH_MONTHS[prev.getMonth()] + ' – ' + (s - 1) + ' ' + TH_MONTHS[mo - 1];
+}
 const thisMonthLocal = () => { const d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); };
 const thisYear = () => +S.boot.today.slice(0, 4);
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -250,7 +258,9 @@ PAGES.dashboard = async token => {
   if (stale(token)) return;
   const c = d.cards;
   const rateCls = c.savingRate >= c.savingTarget ? 'income' : 'expense';
-  let html = head('ภาพรวม', '<input type="month" id="dash-month" value="' + month + '"><button class="btn primary" id="dash-add">+ บันทึกรายการ</button>');
+  const range = cycleRangeLabel(month);
+  let html = head('ภาพรวม' + (range ? ' <span class="muted small" style="font-weight:400">รอบ ' + monthLabel(month) + ' · ' + range + '</span>' : ''),
+    '<input type="month" id="dash-month" value="' + month + '" title="' + (range ? 'เลือกรอบเดือน (ตั้งชื่อตามเดือนที่รอบสิ้นสุด)' : 'เลือกเดือน') + '"><button class="btn primary" id="dash-add">+ บันทึกรายการ</button>');
   html += '<div class="grid cards">' +
     cardHtml('รายรับ', money(c.income), 'income', c.interest ? 'รวมดอกเบี้ยเงินให้ยืม ' + money(c.interest) : '') +
     cardHtml('รายจ่าย', money(c.expense), 'expense') +
@@ -1340,7 +1350,7 @@ async function planMonthHtml() {
   };
   const html = '<div class="panel" id="pl-alert" style="margin-bottom:16px"></div>' +
     '<div class="panel" style="margin-bottom:16px"><div class="table-wrap" style="max-height:none"><table class="data plan-grid"><thead><tr><th>หมวด</th>' +
-    p.months.map(m => '<th class="num">' + monthLabel(m) + '</th>').join('') + '<th class="num">รวม</th></tr></thead><tbody>' +
+    p.months.map(m => '<th class="num" title="' + esc(cycleRangeLabel(m)) + '">' + monthLabel(m) + '</th>').join('') + '<th class="num">รวม</th></tr></thead><tbody>' +
     section('รายรับ', INCOME, 'income') + section('รายจ่าย', EXPENSE, 'expense') + section('เงินออม/ลงทุน', PLAN_SAVING_TYPE, 'saving') + section('ดึงเงินออมมาใช้', PLAN_WITHDRAW_TYPE, 'income') +
     '</tbody><tfoot>' +
     ['income', 'expense', 'saving', 'withdraw', 'remaining'].map(k => '<tr><td>' + { income: 'รวมรายรับ', expense: 'รวมรายจ่าย', saving: 'เงินออม', withdraw: '+ ดึงจากเงินออม', remaining: 'คงเหลือ' }[k] + '</td>' +
@@ -1639,10 +1649,9 @@ function prefetch() {
 /* ---------- เริ่มต้น ---------- */
 (async function init() {
   try {
-    const month = thisMonthLocal();
-    const first = await apiRaw('init', [month]);
+    const first = await apiRaw('init', ['']);
     S.boot = first.boot;
-    API_CACHE['dashboard' + JSON.stringify([month])] = { t: Date.now(), v: JSON.stringify(first.dashboard) };
+    API_CACHE['dashboard' + JSON.stringify([first.dashboard.month])] = { t: Date.now(), v: JSON.stringify(first.dashboard) };
     go('dashboard');
     S.pageLoad = performance.now();
     renderVer();

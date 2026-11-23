@@ -74,6 +74,7 @@ const DEFAULTS = {
     { Key: 'USD_THB_FALLBACK', Value: 33, Description: 'อัตรา USD→THB สำรอง เมื่อดึงอัตโนมัติไม่ได้' },
     { Key: 'DRIVE_FOLDER_ID', Value: '', Description: 'โฟลเดอร์ Drive เก็บไฟล์แนบ (สร้างอัตโนมัติ)' },
     { Key: 'IMPORT_DONE', Value: '', Description: 'วันที่นำเข้าข้อมูลเก่า (ระบบใช้ กันนำเข้าซ้ำ)' },
+    { Key: 'CYCLE_START_DAY', Value: 27, Description: 'วันเริ่มรอบเดือน (วันเงินเดือนออก) เช่น 27 = รอบ 27 ถึง 26 เดือนถัดไป · 1 = ตามเดือนปฏิทิน (ภาษียังนับตามปีปฏิทินเสมอ)' },
     { Key: 'BASE_SALARY', Value: '', Description: 'เงินเดือนปัจจุบันสำหรับคาดการณ์ (เว้นว่าง = ใช้รายการเงินเดือนล่าสุด)' },
     { Key: 'SALARY_GROWTH_PCT', Value: 3, Description: 'เงินเดือนขึ้นต่อปี (%)' },
     { Key: 'SALARY_RAISE_MONTH', Value: 5, Description: 'เดือนที่เงินเดือนขึ้น (1-12)' },

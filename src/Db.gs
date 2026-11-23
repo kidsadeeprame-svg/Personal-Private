@@ -169,6 +169,30 @@ function monthStr_(v) {
   return m ? m[1] + '-' + m[2] : '';
 }
 
+/* ---------- รอบเดือน (ตามวันเงินเดือนออก) ----------
+ * รอบตั้งชื่อตามเดือนที่รอบสิ้นสุด เช่น เริ่มวันที่ 27: 27 พ.ย. – 26 ธ.ค. = รอบ "ธ.ค."
+ * ใช้กับภาพรวม งบ แผน แผน vs จริง · ภาษีใช้ปีปฏิทินตามวันที่ได้รับเงินจริงเสมอ */
+function cycleStart_() {
+  const d = Math.round(num_(getConfig_().CYCLE_START_DAY));
+  return d >= 2 && d <= 28 ? d : 1;
+}
+
+/** วันที่ → รอบเดือน 'yyyy-MM' */
+function cycleMonth_(v) {
+  if (!(v instanceof Date)) return monthStr_(v);
+  const m = monthStr_(v), s = cycleStart_();
+  if (s <= 1) return m;
+  return parseInt(Utilities.formatDate(v, TZ, 'dd'), 10) >= s ? addMonths_(m, 1) : m;
+}
+
+/** รอบเดือน + วันที่ของเดือน → วันที่จริง (เช่น รอบ ธ.ค. วันที่ 27 = 27 พ.ย.) */
+function cycleDate_(month, day) {
+  const s = cycleStart_();
+  const m = s > 1 && day >= s ? addMonths_(month, -1) : month;
+  const d = Math.min(Math.max(1, day), daysInMonth_(m));
+  return toDate_(m + '-' + ('0' + d).slice(-2));
+}
+
 function addMonths_(month, delta) {
   const y = +month.slice(0, 4), m = +month.slice(5, 7) - 1 + delta;
   const d = new Date(y, m, 1, 12);

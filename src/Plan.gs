@@ -40,7 +40,7 @@ function latestSalary_(tx) {
 
 /** เงินเดือนของเดือน m: ขึ้นทุกครั้งที่ผ่านเดือนขึ้นเงินเดือนหลังเดือนปัจจุบัน */
 function salaryAt_(s, base, m) {
-  const now = monthStr_(new Date());
+  const now = cycleMonth_(new Date());
   let raises = 0;
   for (let x = addMonths_(now, 1); x <= m; x = addMonths_(x, 1)) {
     if (+x.slice(5, 7) === s.raiseMonth) raises++;
@@ -59,7 +59,7 @@ function installments_() {
     const start = monthStr_(r.StartMonth);
     const paid = tx.filter(t => String(t.Source) === 'installment:' + id);
     const paidMonths = {};
-    paid.forEach(t => { paidMonths[monthStr_(t.Date)] = true; });
+    paid.forEach(t => { paidMonths[cycleMonth_(t.Date)] = true; });
     const paidAmount = paid.reduce((a, t) => a + num_(t.Amount), 0);
     const end = addMonths_(start, months - 1);
     return {
@@ -78,7 +78,7 @@ function installmentActive_(i, m) {
 }
 
 function apiInstallments_(month) {
-  month = month || monthStr_(new Date());
+  month = month || cycleMonth_(new Date());
   return installments_().map(i => Object.assign({}, i, {
     dueThisMonth: installmentActive_(i, month) && !i.paidMonths[month] && !i.done,
     paidMonths: Object.keys(i.paidMonths).sort(),
@@ -109,7 +109,7 @@ function apiDeleteInstallment_(id) {
 
 /** บันทึกงวดผ่อนของเดือนเป็นรายจ่ายจริง (ข้ามงวดที่บันทึกเดือนนั้นแล้ว) */
 function apiPostInstallments_(ids, month, amounts) {
-  month = month || monthStr_(new Date());
+  month = month || cycleMonth_(new Date());
   amounts = amounts || {};
   const now = new Date();
   const tx = [];
@@ -117,9 +117,9 @@ function apiPostInstallments_(ids, month, amounts) {
     if (i.done || i.paidMonths[month] || !installmentActive_(i, month)) return;
     const amount = amounts[i.ID] !== undefined ? num_(amounts[i.ID]) : Math.min(i.Monthly, i.remaining || i.Monthly);
     if (!amount) return;
-    const day = Math.min(i.DayOfMonth, daysInMonth_(month));
+    const day = i.DayOfMonth;
     tx.push({
-      ID: newId_('T'), Date: toDate_(month + '-' + ('0' + day).slice(-2)), Type: EXPENSE, Category: i.Category,
+      ID: newId_('T'), Date: cycleDate_(month, day), Type: EXPENSE, Category: i.Category,
       Amount: amount, Account: i.Account, Note: i.Name + ' (งวด ' + (i.paidCount + 1) + '/' + i.Months + ')',
       ReceiptUrl: '', Source: 'installment:' + i.ID, CreatedAt: now,
     });
@@ -255,13 +255,13 @@ function loanInterestPlan_(months) {
   const perLoan = [];
   loansComputed_().forEach(l => {
     if (l.InterestType !== 'percent' || !num_(l.InterestRate)) return;
-    const startM = monthStr_(l.Date) || (l.payments[0] ? monthStr_(l.payments[0].Date) : '');
+    const startM = l.Date ? cycleMonth_(toDate_(l.Date)) : (l.payments[0] ? cycleMonth_(toDate_(l.payments[0].Date)) : '');
     if (!startM) return;
-    const lastPay = l.payments.length ? monthStr_(l.payments[l.payments.length - 1].Date) : startM;
+    const lastPay = l.payments.length ? cycleMonth_(toDate_(l.payments[l.payments.length - 1].Date)) : startM;
     const cells = months.map(m => {
       if (m <= startM) return 0;
       if (l.Closed && m > lastPay) return 0;
-      const paidBefore = l.payments.filter(p => monthStr_(p.Date) < m).reduce((a, p) => a + p.Principal, 0);
+      const paidBefore = l.payments.filter(p => cycleMonth_(toDate_(p.Date)) < m).reduce((a, p) => a + p.Principal, 0);
       const rem = l.Principal - paidBefore;
       return rem > 0 ? round2_(rem * num_(l.InterestRate) / 100) : 0;
     });
@@ -283,7 +283,7 @@ function planTotals_(plan) {
 }
 
 function apiPlan_(start, count) {
-  start = monthStr_(start) || monthStr_(new Date());
+  start = monthStr_(start) || cycleMonth_(new Date());
   count = Math.min(36, Math.max(1, num_(count) || 12));
   const plan = buildPlan_(monthRange_(start, count));
   plan.totals = planTotals_(plan);
@@ -359,8 +359,8 @@ function apiResetPlanMonth_(month) {
 
 /** period: 'yyyy-MM' (รายเดือน) หรือ 'yyyy' (ทั้งปี ถึงเดือนปัจจุบัน) */
 function apiPlanVsActual_(period) {
-  period = String(period || monthStr_(new Date()));
-  const now = monthStr_(new Date());
+  period = String(period || cycleMonth_(new Date()));
+  const now = cycleMonth_(new Date());
   const months = period.length === 4
     ? monthRange_(period + '-01', 12).filter(m => m <= now)
     : [monthStr_(period)];
@@ -428,7 +428,7 @@ function apiPlanVsActual_(period) {
 
 function apiProjection_() {
   const s = planSettings_();
-  const start = monthStr_(new Date());
+  const start = cycleMonth_(new Date());
   const thisYear = +start.slice(0, 4);
   const age = s.birthYear ? thisYear - s.birthYear : 0;
   const years = s.birthYear ? Math.max(1, Math.min(50, s.retireAge - age + 1)) : 30;
@@ -478,7 +478,7 @@ function importLegacyPlan() {
     const cfg = getConfig_();
     if (cfg.PLAN_IMPORT_DONE) return 'นำเข้าแผนไปแล้วเมื่อ ' + cfg.PLAN_IMPORT_DONE;
     const ss = ss_();
-    const now = monthStr_(new Date());
+    const now = cycleMonth_(new Date());
     const first = addMonths_(now, 1), last = addMonths_(now, 12);
     const sums = {};
     const add = (m, type, cat, v) => { const k = m + '|' + type + '|' + cat; sums[k] = (sums[k] || 0) + v; };

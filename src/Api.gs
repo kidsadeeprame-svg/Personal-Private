@@ -111,6 +111,8 @@ function apiBootstrap_() {
     usdRate: usdRate_(),
     interestCategory: INTEREST_CATEGORY,
     codeVersion: (PropertiesService.getScriptProperties().getProperty('CODE_SHA') || '').slice(0, 7),
+    cycleMonth: cycleMonth_(new Date()),
+    cycleStart: cycleStart_(),
     goals: [GOAL_EMERGENCY, GOAL_RETIREMENT, GOAL_OTHER],
   };
 }
@@ -176,7 +178,7 @@ function aggregateByMonth_() {
   const agg = {};
   const get = m => (agg[m] = agg[m] || emptyAgg_());
   readTable_('tx').forEach(t => {
-    const m = monthStr_(t.Date);
+    const m = cycleMonth_(t.Date);
     if (!m) return;
     const a = get(m), amt = num_(t.Amount);
     if (t.Type === INCOME) a.income += amt; else a.expense += amt;
@@ -185,14 +187,14 @@ function aggregateByMonth_() {
     if (t.Item) { const ki = k + '|' + t.Item; a.byItem[ki] = (a.byItem[ki] || 0) + amt; }
   });
   readTable_('contributions').forEach(c => {
-    const m = monthStr_(c.Date);
+    const m = cycleMonth_(c.Date);
     if (!m || String(c.Source) === 'opening') return; // ยอดตั้งต้นไม่ใช่เงินออมใหม่ของเดือนนั้น
     const a = get(m), cash = contribCash_(c);
     a.saving += cash;                       // เงินออมสุทธิ = ลงเงิน − ดึงออก
     if (cash >= 0) a.deposit += cash; else a.withdraw += -cash;
   });
   readTable_('loanPayments').forEach(p => {
-    const m = monthStr_(p.Date), i = num_(p.Interest);
+    const m = cycleMonth_(p.Date), i = num_(p.Interest);
     if (!m || !i) return;
     const a = get(m);
     a.income += i;
@@ -236,7 +238,7 @@ function apiYearSummary_(year) {
 /* ============ รายการประจำเดือน ============ */
 
 function apiRecurring_(month) {
-  month = month || monthStr_(new Date());
+  month = month || cycleMonth_(new Date());
   return readTable_('recurring').map(r => ({
     ID: String(r.ID), Name: String(r.Name), Type: r.Type, Category: r.Category, Amount: num_(r.Amount),
     Account: r.Account, DayOfMonth: num_(r.DayOfMonth) || 1, Active: isActive_(r.Active),
@@ -264,18 +266,18 @@ function apiDeleteRecurring_(id) {
 
 /** บันทึกรายการประจำของเดือนที่ระบุ (ข้ามรายการที่บันทึกเดือนนั้นไปแล้ว) */
 function apiPostRecurring_(ids, month, amounts) {
-  month = month || monthStr_(new Date());
+  month = month || cycleMonth_(new Date());
   amounts = amounts || {};
   const list = readTable_('recurring').filter(r => ids.indexOf(String(r.ID)) >= 0 && isActive_(r.Active));
   const now = new Date();
   const tx = [];
   list.forEach(r => {
     if (monthStr_(r.LastPostedMonth) >= month) return;
-    const day = Math.min(num_(r.DayOfMonth) || 1, daysInMonth_(month));
+    const day = num_(r.DayOfMonth) || 1;
     const amount = amounts[r.ID] !== undefined ? num_(amounts[r.ID]) : num_(r.Amount);
     if (!amount) return;
     tx.push({
-      ID: newId_('T'), Date: toDate_(month + '-' + ('0' + day).slice(-2)), Type: r.Type, Category: r.Category,
+      ID: newId_('T'), Date: cycleDate_(month, day), Type: r.Type, Category: r.Category,
       Amount: amount, Account: r.Account, Note: r.Name, ReceiptUrl: '', Source: 'recurring:' + r.ID, CreatedAt: now, Item: r.Item || '',
     });
     updateById_('recurring', 'ID', r.ID, { LastPostedMonth: month });
@@ -799,7 +801,7 @@ function apiUpload_(f) {
 /* ============ Dashboard ============ */
 
 function apiDashboard_(month) {
-  month = monthStr_(month) || monthStr_(new Date());
+  month = monthStr_(month) || cycleMonth_(new Date());
   const cfg = getConfig_();
   const agg = aggregateByMonth_();
   const cur = agg[month] || emptyAgg_();
@@ -838,7 +840,7 @@ function apiDashboard_(month) {
     .map(i => ({ ID: i.ID, Name: i.Name, Category: i.Category, Amount: Math.min(i.Monthly, i.remaining || i.Monthly), Type: EXPENSE, paid: i.paidCount, months: i.Months }));
 
   // แผนเดือนนี้ + เดือนข้างหน้าที่คาดว่าเงินไม่พอ
-  const now = monthStr_(new Date());
+  const now = cycleMonth_(new Date());
   const plan = buildPlan_(monthRange_(month, 1));
   const planNow = planTotals_(plan)[0];
   const future = planTotals_(buildPlan_(monthRange_(now, 12)));
