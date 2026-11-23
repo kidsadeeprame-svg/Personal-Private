@@ -12,27 +12,64 @@ const UPDATE_REPO = 'kidsadeeprame-svg/Personal-Private';
 const UPDATE_BRANCH = 'main';
 const UPDATE_DIR = 'src';
 
+const UPDATE_FILE_LIST = 'apps-script-files.json'; // รายชื่อไฟล์ใน src/ (อยู่ที่ root ของ repo)
+
+function ghToken_() {
+  return PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN') || '';
+}
+
 function ghHeaders_(raw) {
   const h = { Accept: raw ? 'application/vnd.github.raw' : 'application/vnd.github+json', 'User-Agent': 'apps-script-updater' };
-  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+  const token = ghToken_();
   if (token) h.Authorization = 'Bearer ' + token;
   return h;
 }
 
+/** GitHub REST API — ใช้เฉพาะเมื่อมี GITHUB_TOKEN (แบบไม่ล็อกอิน IP ของ Google มักโดนจำกัดจำนวนครั้ง) */
 function ghApi_(path) {
   const res = UrlFetchApp.fetch('https://api.github.com/repos/' + UPDATE_REPO + path, { headers: ghHeaders_(false), muteHttpExceptions: true });
   const code = res.getResponseCode();
-  if (code === 404) throw new Error('หา repo ไม่เจอ (ถ้า repo เป็น private ต้องตั้ง Script property GITHUB_TOKEN)');
-  if (code === 403 || code === 429) throw new Error('GitHub จำกัดจำนวนครั้งชั่วคราว ลองใหม่ในอีกสักครู่');
+  if (code === 404) throw new Error('หา repo ไม่เจอ (ตรวจ GITHUB_TOKEN ว่ามีสิทธิ์อ่าน repo นี้)');
+  if (code === 401) throw new Error('GITHUB_TOKEN ไม่ถูกต้องหรือหมดอายุ');
   if (code !== 200) throw new Error('GitHub ตอบกลับ ' + code + ': ' + res.getContentText().slice(0, 200));
   return JSON.parse(res.getContentText());
 }
 
-function ghRaw_(sha, path) {
-  const url = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + sha + '/' + path.split('/').map(encodeURIComponent).join('/');
+function ghRaw_(ref, path) {
+  const url = 'https://raw.githubusercontent.com/' + UPDATE_REPO + '/' + ref + '/' + path.split('/').map(encodeURIComponent).join('/');
   const res = UrlFetchApp.fetch(url, { headers: ghHeaders_(true), muteHttpExceptions: true });
   if (res.getResponseCode() !== 200) throw new Error('ดาวน์โหลด ' + path + ' ไม่สำเร็จ (' + res.getResponseCode() + ')');
   return res.getContentText('UTF-8');
+}
+
+/** commit ล่าสุดของ branch: { sha, message, date } */
+function latestCommit_() {
+  if (ghToken_()) {
+    const br = ghApi_('/branches/' + UPDATE_BRANCH);
+    return { sha: br.commit.sha, message: String(br.commit.commit.message || '').split('\n')[0], date: br.commit.commit.committer ? br.commit.commit.committer.date : '' };
+  }
+  // repo public: อ่านจาก commit feed (หน้าเว็บปกติ ไม่ใช่ API จึงไม่ติดโควตา)
+  const res = UrlFetchApp.fetch('https://github.com/' + UPDATE_REPO + '/commits/' + UPDATE_BRANCH + '.atom',
+    { headers: { 'User-Agent': 'apps-script-updater' }, muteHttpExceptions: true });
+  if (res.getResponseCode() === 404) throw new Error('หา repo ไม่เจอ (ถ้า repo เป็น private ต้องตั้ง Script property GITHUB_TOKEN)');
+  if (res.getResponseCode() !== 200) throw new Error('อ่านเวอร์ชันล่าสุดจาก GitHub ไม่สำเร็จ (' + res.getResponseCode() + ') ลองใหม่ในอีกสักครู่');
+  const xml = res.getContentText('UTF-8');
+  const entry = xml.slice(xml.indexOf('<entry>'));
+  const sha = (entry.match(/Grit::Commit\/([0-9a-f]{40})/) || [])[1];
+  if (!sha) throw new Error('อ่านเวอร์ชันล่าสุดจาก GitHub ไม่สำเร็จ (รูปแบบข้อมูลเปลี่ยน)');
+  const title = (entry.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
+  const date = (entry.match(/<updated>([^<]+)<\/updated>/) || [])[1] || '';
+  return { sha, message: title.trim().replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"), date };
+}
+
+/** รายชื่อไฟล์ใน src/ ของ commit นั้น */
+function sourceFiles_(sha) {
+  if (ghToken_()) {
+    return ghApi_('/git/trees/' + sha + '?recursive=1').tree
+      .filter(t => t.type === 'blob' && t.path.indexOf(UPDATE_DIR + '/') === 0 && t.path.split('/').length === 2)
+      .map(t => t.path.split('/')[1]);
+  }
+  return JSON.parse(ghRaw_(sha, UPDATE_FILE_LIST)).files;
 }
 
 /** ข้อมูลเวอร์ชันปัจจุบัน/ล่าสุด */
@@ -44,10 +81,10 @@ function updateInfo_(checkLatest) {
     autoUpdate: ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'updateFromGitHub'),
   };
   if (checkLatest) {
-    const br = ghApi_('/branches/' + UPDATE_BRANCH);
-    out.latestSha = br.commit.sha;
-    out.latestMessage = String(br.commit.commit.message || '').split('\n')[0];
-    out.latestDate = br.commit.commit.committer ? br.commit.commit.committer.date : '';
+    const c = latestCommit_();
+    out.latestSha = c.sha;
+    out.latestMessage = c.message;
+    out.latestDate = c.date;
     out.upToDate = out.latestSha === out.currentSha;
   }
   return out;
@@ -65,31 +102,28 @@ function updateFromGitHub(force) {
   if (!props.getProperty('SPREADSHEET_ID')) props.setProperty('SPREADSHEET_ID', ss_().getId());
 
   // 2) หาเวอร์ชันล่าสุด
-  const br = ghApi_('/branches/' + UPDATE_BRANCH);
-  const sha = br.commit.sha;
-  const msg = String(br.commit.commit.message || '').split('\n')[0];
+  const c = latestCommit_();
+  const sha = c.sha;
   if (!force && sha === props.getProperty('CODE_SHA')) {
     const r = 'โค้ดเป็นเวอร์ชันล่าสุดแล้ว (' + sha.slice(0, 7) + ')';
     Logger.log(r);
     return { updated: false, message: r, sha };
   }
 
-  // 3) ดาวน์โหลดไฟล์ใน src/
-  const tree = ghApi_('/git/trees/' + sha + '?recursive=1').tree
-    .filter(t => t.type === 'blob' && t.path.indexOf(UPDATE_DIR + '/') === 0 && t.path.split('/').length === 2);
+  // 3) ดาวน์โหลดไฟล์ใน src/ ของ commit นั้น
   const files = [];
-  tree.forEach(t => {
-    const file = t.path.split('/')[1];
+  sourceFiles_(sha).forEach(file => {
     let type, name;
     if (file === 'appsscript.json') { type = 'JSON'; name = 'appsscript'; }
     else if (/\.gs$/.test(file)) { type = 'SERVER_JS'; name = file.replace(/\.gs$/, ''); }
     else if (/\.html$/.test(file)) { type = 'HTML'; name = file.replace(/\.html$/, ''); }
     else return;
-    files.push({ name, type, source: ghRaw_(sha, t.path) });
+    files.push({ name, type, source: ghRaw_(sha, UPDATE_DIR + '/' + file) });
   });
   ['appsscript', 'Api', 'Config', 'Updater', 'Index'].forEach(n => {
     if (!files.some(f => f.name === n)) throw new Error('ไฟล์ใน GitHub ไม่ครบ (ไม่พบ ' + n + ') ยกเลิกการอัปเดต');
   });
+  const msg = c.message;
 
   // 4) เขียนทับโค้ดในโปรเจกต์นี้ผ่าน Apps Script API
   const res = UrlFetchApp.fetch('https://script.googleapis.com/v1/projects/' + ScriptApp.getScriptId() + '/content', {

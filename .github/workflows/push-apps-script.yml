@@ -12,7 +12,7 @@ name: Push to Apps Script
 on:
   push:
     branches: [main]
-    paths: ['src/**']
+    paths: ['src/**', 'apps-script-files.json']
   workflow_dispatch:
 
 concurrency:
@@ -24,6 +24,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check apps-script-files.json matches src/
+        run: |
+          expected=$(ls src | grep -E '\.(gs|html)$|^appsscript\.json$' | sort)
+          listed=$(python3 -c "import json;print('\n'.join(sorted(json.load(open('apps-script-files.json'))['files'])))")
+          if [ "$expected" != "$listed" ]; then
+            echo "::error::apps-script-files.json ไม่ตรงกับไฟล์ใน src/ — ปุ่มอัปเดตโค้ดในเว็บจะดึงไฟล์ไม่ครบ"
+            diff <(echo "$expected") <(echo "$listed") || true
+            exit 1
+          fi
 
       - uses: actions/setup-node@v4
         with:

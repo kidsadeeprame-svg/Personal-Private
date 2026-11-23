@@ -1,0 +1,16 @@
+{
+  "_note": "รายชื่อไฟล์ใน src/ ที่ Updater.gs ดึงไปใช้ — เพิ่ม/ลบไฟล์ใน src/ ต้องแก้ที่นี่ด้วย",
+  "files": [
+    "Api.gs",
+    "App.html",
+    "Config.gs",
+    "Db.gs",
+    "Import.gs",
+    "Index.html",
+    "Plan.gs",
+    "Setup.gs",
+    "Styles.html",
+    "Updater.gs",
+    "appsscript.json"
+  ]
+}
