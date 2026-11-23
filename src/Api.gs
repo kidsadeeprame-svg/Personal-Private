@@ -40,6 +40,7 @@ const API_ = {
   saveSnapshots: apiSaveSnapshots_,
   deleteSnapshot: apiDeleteSnapshot_,
   resetInvest: apiResetInvest_,
+  withdraw: apiWithdraw_,
   loans: apiLoans_,
   saveLoan: apiSaveLoan_,
   deleteLoan: apiDeleteLoan_,
@@ -71,7 +72,7 @@ const API_ = {
 };
 
 const WRITE_APIS_ = ['saveTransaction', 'deleteTransaction', 'saveRecurring', 'deleteRecurring', 'postRecurring',
-  'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'resetInvest', 'saveLoan', 'deleteLoan',
+  'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'resetInvest', 'withdraw', 'saveLoan', 'deleteLoan',
   'savePayment', 'deletePayment', 'saveTax', 'saveVisit', 'deleteVisit', 'saveTable',
   'savePlanCell', 'resetPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments',
   'savePlanItem', 'deletePlanItem'];
@@ -167,7 +168,7 @@ function apiDeleteTransaction_(id) {
 }
 
 function emptyAgg_() {
-  return { income: 0, expense: 0, saving: 0, interest: 0, byCat: {}, byItem: {} };
+  return { income: 0, expense: 0, saving: 0, deposit: 0, withdraw: 0, interest: 0, byCat: {}, byItem: {} };
 }
 
 /** รวมยอดรายเดือน: รายรับ (รวมดอกเบี้ยเงินให้ยืม), รายจ่าย, เงินออม */
@@ -185,7 +186,10 @@ function aggregateByMonth_() {
   });
   readTable_('contributions').forEach(c => {
     const m = monthStr_(c.Date);
-    if (m) get(m).saving += num_(c.AmountTHB);
+    if (!m || String(c.Source) === 'opening') return; // ยอดตั้งต้นไม่ใช่เงินออมใหม่ของเดือนนั้น
+    const a = get(m), cash = contribCash_(c);
+    a.saving += cash;                       // เงินออมสุทธิ = ลงเงิน − ดึงออก
+    if (cash >= 0) a.deposit += cash; else a.withdraw += -cash;
   });
   readTable_('loanPayments').forEach(p => {
     const m = monthStr_(p.Date), i = num_(p.Interest);
@@ -287,6 +291,35 @@ function fundKind_(f) {
   return (f.Currency || 'THB') === 'USD' ? KIND_USD : KIND_CASH;
 }
 
+/** รายการลงเงิน/ดึงเงินนี้เกิดหลังยอดที่บันทึกไว้หรือไม่ (ใช้เวลาที่บันทึกถ้ามี ไม่งั้นเทียบเดือน) */
+function afterSnapshot_(c, snap) {
+  if (snap.SavedAt instanceof Date && c.CreatedAt instanceof Date) return c.CreatedAt.getTime() > snap.SavedAt.getTime();
+  if (snap.SavedAt instanceof Date) return fmtDate_(c.Date) > fmtDate_(snap.SavedAt);
+  return monthStr_(c.Date) > monthStr_(snap.Month);
+}
+
+/** เงินสดที่เข้า/ออกจริงของรายการ (ลงเงิน = บวก, ดึงออก = ลบ) */
+function contribCash_(c) {
+  return c.Cash === '' || c.Cash === null || c.Cash === undefined ? num_(c.AmountTHB) : num_(c.Cash);
+}
+
+/** ยอดที่ต้องเติมคืนของแต่ละกอง: ดึงออกแบบ "ต้องเติมคืน" แล้วลดลงเมื่อมีการลงเงินกองนั้นภายหลัง */
+function refillStatus_() {
+  const by = {};
+  readTable_('contributions').slice().sort((a, b) => (fmtDate_(a.Date) + (a.CreatedAt instanceof Date ? a.CreatedAt.getTime() : 0))
+    .localeCompare(fmtDate_(b.Date) + (b.CreatedAt instanceof Date ? b.CreatedAt.getTime() : 0))).forEach(c => {
+    const fund = String(c.Fund);
+    const cash = contribCash_(c);
+    const st = by[fund] = by[fund] || { fund: fund, owed: 0, since: '' };
+    if (String(c.Source) === 'withdraw') {
+      if (isTrue_(c.Refill)) { if (!st.owed) st.since = fmtDate_(c.Date); st.owed += -cash; }
+    } else if (cash > 0 && String(c.Source) !== 'opening' && st.owed > 0) {
+      st.owed = Math.max(0, st.owed - cash);
+    }
+  });
+  return Object.keys(by).map(k => by[k]).filter(s => s.owed > 0.005).map(s => Object.assign(s, { owed: round2_(s.owed) }));
+}
+
 function fundsValuation_() {
   const rate = usdRate_();
   const funds = readTable_('funds');
@@ -313,8 +346,7 @@ function fundsValuation_() {
     const snap = fs[fs.length - 1];
     let valueFX;
     if (snap) {
-      const sm = monthStr_(snap.Month);
-      valueFX = num_(snap.ValueFX) + cs.filter(c => monthStr_(c.Date) > sm).reduce((s, c) => s + num_(c.AmountFX), 0);
+      valueFX = num_(snap.ValueFX) + cs.filter(c => afterSnapshot_(c, snap)).reduce((s, c) => s + num_(c.AmountFX), 0);
     } else {
       valueFX = cs.reduce((s, c) => s + num_(c.AmountFX), 0);
     }
@@ -337,7 +369,9 @@ function apiInvest_() {
       ID: String(c.ID), BatchID: String(c.BatchID), Date: fmtDate_(c.Date), Fund: String(c.Fund), Currency: c.Currency,
       AmountFX: num_(c.AmountFX), Rate: num_(c.Rate), AmountTHB: num_(c.AmountTHB), Account: String(c.Account || ''),
       Note: String(c.Note || ''), Source: String(c.Source || ''), Units: num_(c.Units),
+      Cash: contribCash_(c), Refill: isTrue_(c.Refill),
     })).sort((a, b) => b.Date.localeCompare(a.Date)),
+    refill: refillStatus_(),
     kinds: FUND_KINDS,
     snapshots: readTable_('snapshots').map(s => ({
       ID: String(s.ID), Month: monthStr_(s.Month), Fund: String(s.Fund), Currency: s.Currency,
@@ -353,7 +387,14 @@ function apiSaveContribution_(b) {
   const lines = (b.lines || []).filter(l => l.fund && num_(l.amountTHB));
   if (!lines.length) throw new Error('กรุณาใส่จำนวนเงินอย่างน้อย 1 กอง');
   const batch = b.BatchID || newId_('B');
-  if (b.BatchID) deleteWhere_('contributions', r => String(r.BatchID) === String(b.BatchID));
+  let createdAt = new Date();
+  if (b.BatchID) {
+    const old = readTable_('contributions').filter(r => String(r.BatchID) === String(b.BatchID));
+    if (old.some(r => String(r.Source) === 'withdraw')) throw new Error('รายการดึงเงินแก้ไขไม่ได้ ให้ลบแล้วบันทึกใหม่');
+    const firstOld = old.map(r => r.CreatedAt).filter(d => d instanceof Date).sort((x, y) => x - y)[0];
+    if (firstOld) createdAt = firstOld;
+    deleteWhere_('contributions', r => String(r.BatchID) === String(b.BatchID));
+  }
   const date = toDate_(b.date);
   const navUpdates = [];
   const rows = lines.map(l => {
@@ -374,7 +415,7 @@ function apiSaveContribution_(b) {
     return {
       ID: newId_('C'), BatchID: batch, Date: date, Fund: l.fund, Currency: cur,
       AmountFX: cur === 'USD' ? round2_(thb / rate) : thb, Rate: rate, AmountTHB: thb,
-      Account: b.account || '', Note: b.note || '', Source: 'manual', Units: units,
+      Account: b.account || '', Note: b.note || '', Source: 'manual', Units: units, CreatedAt: createdAt,
     };
   });
   appendRows_('contributions', rows);
@@ -407,12 +448,12 @@ function apiSaveSnapshots_(b) {
       const nav = num_(i.nav);
       updateById_('funds', 'Name', i.fund, { NAV: nav, NavDate: today });
       const value = round2_((val[i.fund] ? val[i.fund].units : 0) * nav);
-      return { ID: newId_('S'), Month: month, Fund: i.fund, Currency: 'THB', ValueFX: value, Rate: 1, ValueTHB: value };
+      return { ID: newId_('S'), Month: month, Fund: i.fund, Currency: 'THB', ValueFX: value, Rate: 1, ValueTHB: value, SavedAt: today };
     }
     const cur = kind === KIND_USD ? 'USD' : 'THB';
     const rate = cur === 'USD' ? (num_(i.rate) || usdRate_()) : 1;
     const fx = num_(i.valueFX);
-    return { ID: newId_('S'), Month: month, Fund: i.fund, Currency: cur, ValueFX: fx, Rate: rate, ValueTHB: round2_(fx * rate) };
+    return { ID: newId_('S'), Month: month, Fund: i.fund, Currency: cur, ValueFX: fx, Rate: rate, ValueTHB: round2_(fx * rate), SavedAt: today };
   });
   appendRows_('snapshots', rows);
   return rows.length;
@@ -473,17 +514,51 @@ function apiResetInvest_(rows) {
       contrib.push({
         ID: newId_('C'), BatchID: batch, Date: today, Fund: name, Currency: cur,
         AmountFX: kind === KIND_USD ? valueFX : cost, Rate: kind === KIND_USD && valueFX ? round2_(cost / valueFX) : 1,
-        AmountTHB: cost, Account: '', Note: 'ยอดตั้งต้น', Source: 'opening', Units: units,
+        AmountTHB: cost, Account: '', Note: 'ยอดตั้งต้น', Source: 'opening', Units: units, CreatedAt: today,
       });
     }
     if (kind !== KIND_FUND) {
-      snaps.push({ ID: newId_('S'), Month: month, Fund: name, Currency: cur, ValueFX: valueFX, Rate: kind === KIND_USD ? rate : 1, ValueTHB: valueTHB });
+      snaps.push({ ID: newId_('S'), Month: month, Fund: name, Currency: cur, ValueFX: valueFX, Rate: kind === KIND_USD ? rate : 1, ValueTHB: valueTHB, SavedAt: new Date(today.getTime() + 1) });
     }
   });
   replaceTable_('funds', funds);
   replaceTable_('contributions', contrib);
   replaceTable_('snapshots', snaps);
   return { funds: funds.length, backup: 'Backup_*_' + stamp };
+}
+
+/**
+ * ดึงเงินออกจากกองมาใช้: {date, fund, amountTHB, rate?, nav?, account, note, refill}
+ * ต้นทุนของกองลดลงตามสัดส่วน (ต้นทุนเฉลี่ย) · ในสรุปรายเดือนหักออกจากเงินออม
+ */
+function apiWithdraw_(w) {
+  const f = readTable_('funds').find(x => String(x.Name) === String(w.fund));
+  if (!f) throw new Error('ไม่พบกอง ' + w.fund);
+  const thb = num_(w.amountTHB);
+  if (thb <= 0) throw new Error('กรุณาใส่จำนวนเงินที่ดึง');
+  const v = fundsValuation_().find(x => x.Name === String(f.Name));
+  if (v && thb > v.valueTHB + 0.005) throw new Error('ดึงได้ไม่เกินยอดในกอง (' + v.valueTHB.toLocaleString() + ' บาท)');
+  const kind = fundKind_(f);
+  const ratioOfValue = v && v.valueTHB ? thb / v.valueTHB : 1;
+  const costOut = v ? round2_(v.cost * ratioOfValue) : thb;
+  let amountFX = -thb, units = '', rate = 1, cur = 'THB';
+  if (kind === KIND_USD) {
+    cur = 'USD';
+    rate = num_(w.rate) || usdRate_();
+    amountFX = -round2_(thb / rate);
+  } else if (kind === KIND_FUND) {
+    const nav = num_(w.nav) || num_(f.NAV);
+    if (!nav) throw new Error('กรุณาใส่ NAV ที่ขาย');
+    units = -Math.round(thb / nav * 10000) / 10000;
+    amountFX = -costOut;
+  }
+  const row = {
+    ID: newId_('C'), BatchID: newId_('W'), Date: toDate_(w.date), Fund: String(f.Name), Currency: cur,
+    AmountFX: amountFX, Rate: rate, AmountTHB: -costOut, Account: w.account || '', Note: w.note || 'ดึงเงินมาใช้',
+    Source: 'withdraw', Units: units, Cash: -thb, Refill: !!w.refill, CreatedAt: new Date(),
+  };
+  appendRows_('contributions', [row]);
+  return true;
 }
 
 function apiDeleteSnapshot_(id) {
@@ -773,11 +848,11 @@ function apiDashboard_(month) {
     month,
     cards: {
       income: round2_(cur.income), expense: round2_(cur.expense), saving: round2_(cur.saving),
-      remaining: round2_(cur.income - cur.expense - cur.saving), interest: round2_(cur.interest),
+      remaining: round2_(cur.income - cur.expense - cur.saving), interest: round2_(cur.interest), withdraw: round2_(cur.withdraw),
       savingRate: cur.income > 0 ? round2_(cur.saving / cur.income * 100) : 0, savingTarget,
     },
     budgets, expenseByCat, trend, goals,
     loans: { total: round2_(openLoans.reduce((s, l) => s + l.remaining, 0)), list: openLoans },
-    recurringPending, installmentsPending, planNow, planAlerts,
+    recurringPending, installmentsPending, planNow, planAlerts, refill: refillStatus_(),
   };
 }

@@ -254,7 +254,7 @@ PAGES.dashboard = async token => {
   html += '<div class="grid cards">' +
     cardHtml('รายรับ', money(c.income), 'income', c.interest ? 'รวมดอกเบี้ยเงินให้ยืม ' + money(c.interest) : '') +
     cardHtml('รายจ่าย', money(c.expense), 'expense') +
-    cardHtml('เงินออม/ลงทุน', money(c.saving), 'saving') +
+    cardHtml('เงินออม/ลงทุน', money(c.saving), 'saving', c.withdraw ? 'สุทธิ หลังดึงออกมาใช้ ' + money(c.withdraw) : '') +
     cardHtml('คงเหลือ', money(c.remaining), c.remaining >= 0 ? 'income' : 'expense') +
     cardHtml('อัตราการออม', fmt(c.savingRate, 1) + '%', rateCls, 'เป้า ' + c.savingTarget + '% ของรายรับ') +
     '</div>';
@@ -267,13 +267,13 @@ PAGES.dashboard = async token => {
   const pn = d.planNow;
   html += '<div class="panel" style="margin-bottom:16px"><h2>แผนเดือนนี้ vs จริง<span class="spacer"></span><a class="small" data-go="plan">ดูแผน →</a></h2><div class="grid cards" style="margin:0">' +
     planCmpCard('รายรับ', pn.income, c.income, true) + planCmpCard('รายจ่าย', pn.expense, c.expense, false) +
-    planCmpCard('เงินออม', pn.saving, c.saving, true) + planCmpCard('คงเหลือ', pn.remaining, c.remaining, true) + '</div></div>';
+    planCmpCard('เงินออม', pn.saving - (pn.withdraw || 0), c.saving, true) + planCmpCard('คงเหลือ', pn.remaining, c.remaining, true) + '</div></div>';
   html += '<div class="grid three" style="margin-bottom:16px">' +
     '<div class="panel"><h2>แนวโน้ม 12 เดือน</h2><div class="chart-box"><canvas id="ch-trend"></canvas></div></div>' +
     '<div class="panel"><h2>งบประมาณรายหมวด · ' + monthLabel(month) + '</h2>' + budgetsHtml(d.budgets) + '</div></div>';
 
   html += '<div class="grid two">' +
-    '<div class="panel"><h2>เป้าหมายการออม<span class="spacer"></span><a class="small" data-go="invest">ดูทั้งหมด →</a></h2>' + goalsHtml(d.goals) + '</div>' +
+    '<div class="panel"><h2>เป้าหมายการออม<span class="spacer"></span><a class="small" data-go="invest">ดูทั้งหมด →</a></h2>' + goalsHtml(d.goals) + refillHtml(d.refill) + '</div>' +
     '<div class="panel"><h2>เงินให้ยืมที่ยังค้าง<span class="spacer"></span><span class="badge info">' + money(d.loans.total) + '</span></h2>' + loansMiniHtml(d.loans.list) + '</div>' +
     '<div class="panel"><h2>รายจ่ายตามหมวด · ' + monthLabel(month) + '</h2>' + expenseCatHtml(d.expenseByCat, c.expense) + '</div>' +
     '<div class="panel"><h2>รายการประจำที่ยังไม่บันทึกเดือนนี้</h2>' + recurringMiniHtml(d.recurringPending.concat(d.installmentsPending.map(i => Object.assign({}, i, { Name: i.Name + ' (งวด ' + (i.paid + 1) + '/' + i.months + ')', inst: true })))) + '</div>' +
@@ -345,6 +345,12 @@ function expenseCatHtml(list, total) {
   return list.map(x => '<div class="budget-row"><div class="top"><span>' + esc(x.category) + '</span><span class="small muted">' + money(x.amount) + ' · ' +
     fmt(total ? x.amount / total * 100 : 0, 1) + '%</span></div>' + barHtml(total ? x.amount / total * 100 : 0) + '</div>').join('');
 }
+function refillHtml(list) {
+  if (!list || !list.length) return '';
+  return '<div class="refill-box"><b>ต้องเติมคืน</b>' + list.map(r => '<div class="budget-row" style="margin:6px 0 0"><div class="top"><span>' + esc(r.fund) +
+    '</span><span class="small expense">' + money(r.owed) + '</span></div><div class="small muted">ดึงออกตั้งแต่ ' + dateLabel(r.since) + ' · ลงเงินกองนี้แล้วยอดจะลดลงเอง</div></div>').join('') + '</div>';
+}
+
 function planCmpCard(label, plan, actual, higherIsGood) {
   const diff = actual - plan;
   const good = higherIsGood ? diff >= 0 : diff <= 0;
@@ -573,7 +579,7 @@ PAGES.invest = async token => {
   const goals = Object.keys(d.targets).map(g => ({ goal: g, target: d.targets[g], value: d.funds.filter(f => f.Goal === g).reduce((s, f) => s + f.valueTHB, 0) }));
 
   S.investFunds = d.funds;
-  let html = head('เงินออม / ลงทุน', '<span class="muted small">USD/THB ' + fmt(d.usdRate, 2) + '</span><button class="btn ghost" id="inv-reset">เริ่มต้นใหม่</button><button class="btn" id="inv-snap">อัปเดตยอด / NAV</button><button class="btn primary" id="inv-add">+ ลงเงิน</button>');
+  let html = head('เงินออม / ลงทุน', '<span class="muted small">USD/THB ' + fmt(d.usdRate, 2) + '</span><button class="btn ghost" id="inv-reset">เริ่มต้นใหม่</button><button class="btn" id="inv-withdraw">ดึงเงินออกมาใช้</button><button class="btn" id="inv-snap">อัปเดตยอด / NAV</button><button class="btn primary" id="inv-add">+ ลงเงิน</button>');
   html += '<div class="grid cards">' + cardHtml('มูลค่ารวม', money(totalValue), 'saving') + cardHtml('เงินต้นที่ลงไป', money(totalCost)) +
     cardHtml('กำไร/ขาดทุน', (totalValue - totalCost >= 0 ? '+' : '') + money(totalValue - totalCost), totalValue - totalCost >= 0 ? 'income' : 'expense', totalCost ? fmt((totalValue - totalCost) / totalCost * 100, 2) + '%' : '') + '</div>';
 
@@ -584,7 +590,7 @@ PAGES.invest = async token => {
       '</td><td class="num">' + money(f.valueTHB) + (f.Currency === 'USD' ? '<div class="small muted">$' + fmt(f.valueFX, 2) + '</div>' : '') + '</td><td class="num ' + (f.gain >= 0 ? 'income' : 'expense') + '">' + (f.gain >= 0 ? '+' : '') + fmt(f.gain) +
       (f.cost ? '<div class="small">' + fmt(f.gain / f.cost * 100, 2) + '%</div>' : '') + '</td><td class="small muted">' + (f.lastSnapshot ? monthLabel(f.lastSnapshot) : 'ยังไม่บันทึก') + '</td></tr>').join('') +
     '</tbody></table><p class="muted small">มูลค่าปัจจุบัน = ยอดที่บันทึกล่าสุด + เงินที่ลงเพิ่มหลังจากนั้น (กอง USD คิดด้วยอัตราแลกเปลี่ยนปัจจุบัน)</p></div>' +
-    '<div class="panel"><h2>ความคืบหน้าเป้าหมาย</h2>' + goalsHtml(goals) + '</div></div>';
+    '<div class="panel"><h2>ความคืบหน้าเป้าหมาย</h2>' + goalsHtml(goals) + refillHtml(d.refill) + '</div></div>';
 
   html += '<div class="panel" style="margin-bottom:16px"><h2>มูลค่าตามเวลา</h2><div class="chart-box"><canvas id="ch-inv"></canvas></div></div>';
 
@@ -592,14 +598,24 @@ PAGES.invest = async token => {
   d.contributions.forEach(c => { (batches[c.BatchID] = batches[c.BatchID] || []).push(c); });
   const blist = Object.keys(batches).map(k => batches[k]).sort((a, b) => b[0].Date.localeCompare(a[0].Date));
   html += '<div class="panel"><h2>ประวัติการลงเงิน</h2><div class="table-wrap" style="max-height:420px"><table class="data"><thead><tr><th>วันที่</th><th>แบ่งเข้ากอง</th><th>บัญชี</th><th>หมายเหตุ</th><th class="num">รวม</th><th></th></tr></thead><tbody>' +
-    (blist.length ? blist.map(b => '<tr><td>' + dateLabel(b[0].Date) + '</td><td>' + b.map(c => esc(c.Fund) + ' ' + money(c.AmountTHB) + (c.Currency === 'USD' ? ' <span class="muted small">($' + fmt(c.AmountFX, 2) + ' @' + fmt(c.Rate, 2) + ')</span>' : '')).join('<br>') +
-      '</td><td>' + esc(b[0].Account) + '</td><td>' + esc(b[0].Note) + (b[0].Source.indexOf('import') === 0 ? ' <span class="badge">นำเข้า</span>' : '') + '</td><td class="num saving">' + money(b.reduce((s, c) => s + c.AmountTHB, 0)) +
-      '</td><td style="white-space:nowrap"><button class="icon-btn" data-bedit="' + esc(b[0].BatchID) + '">✏️</button><button class="icon-btn" data-bdel="' + esc(b[0].BatchID) + '">🗑</button></td></tr>').join('')
+    (blist.length ? blist.map(b => {
+      const wd = b[0].Source === 'withdraw';
+      const total = b.reduce((s, c) => s + c.Cash, 0);
+      return '<tr><td>' + dateLabel(b[0].Date) + '</td><td>' + b.map(c => esc(c.Fund) + ' ' + money(Math.abs(c.Cash)) +
+        (c.Currency === 'USD' ? ' <span class="muted small">($' + fmt(Math.abs(c.AmountFX), 2) + ' @' + fmt(c.Rate, 2) + ')</span>' : '') +
+        (c.Units ? ' <span class="muted small">(' + fmt(Math.abs(c.Units), 4) + ' หน่วย)</span>' : '')).join('<br>') +
+        '</td><td>' + esc(b[0].Account) + '</td><td>' + (wd ? '<span class="badge warn">ดึงออกมาใช้</span>' + (b[0].Refill ? ' <span class="badge">ต้องเติมคืน</span>' : '') + ' ' : '') + esc(b[0].Note) +
+        (b[0].Source.indexOf('import') === 0 ? ' <span class="badge">นำเข้า</span>' : '') + (b[0].Source === 'opening' ? ' <span class="badge info">ยอดตั้งต้น</span>' : '') +
+        '</td><td class="num ' + (wd ? 'expense' : 'saving') + '">' + (wd ? '−' : '') + money(Math.abs(total)) +
+        '</td><td style="white-space:nowrap">' + (wd ? '' : '<button class="icon-btn" data-bedit="' + esc(b[0].BatchID) + '">✏️</button>') +
+        '<button class="icon-btn" data-bdel="' + esc(b[0].BatchID) + '">🗑</button></td></tr>';
+    }).join('')
       : '<tr><td colspan="6" class="empty">ยังไม่มีการลงเงิน</td></tr>') + '</tbody></table></div></div>';
   $('#main').innerHTML = html;
 
   $('#inv-add').addEventListener('click', () => contributionModal(null));
   $('#inv-reset').addEventListener('click', () => resetInvestModal(d));
+  $('#inv-withdraw').addEventListener('click', () => withdrawModal(d, {}));
   $('#inv-snap').addEventListener('click', () => snapshotModal(d));
   $$('[data-bedit]').forEach(b => b.addEventListener('click', () => contributionModal(batches[b.dataset.bedit])));
   $$('[data-bdel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบการลงเงินครั้งนี้ทั้งหมด?', async () => {
@@ -724,6 +740,47 @@ function snapshotModal(d) {
       }).filter(Boolean);
       await api('saveSnapshots', { month: f.month, items });
       toast('อัปเดตแล้ว'); refresh();
+    },
+  });
+}
+
+/** ดึงเงินออกจากกองมาใช้ (ค่าเริ่มต้น: กองเงินฉุกเฉินที่มียอดมากที่สุด) */
+function withdrawModal(d, pre) {
+  const funds = d.funds.filter(f => f.Active && f.valueTHB > 0);
+  if (!funds.length) return toast('ยังไม่มีกองที่มียอดเงิน', true);
+  const em = funds.filter(f => f.Goal === 'ฉุกเฉิน').sort((a, b) => b.valueTHB - a.valueTHB)[0] || funds[0];
+  const sel = pre.fund || em.Name;
+  openModal({
+    title: 'ดึงเงินออกมาใช้',
+    body: '<div class="form-grid">' +
+      field('ดึงจากกอง', '<select name="fund">' + funds.map(f => '<option value="' + esc(f.Name) + '"' + (f.Name === sel ? ' selected' : '') + '>' + esc(f.Name) + ' (' + money(f.valueTHB) + ')</option>').join('') + '</select>', 'full') +
+      field('วันที่', '<input type="date" name="date" value="' + (pre.date || today()) + '">') +
+      field('จำนวนเงิน (บาท)', '<input type="number" step="0.01" name="amountTHB" value="' + (pre.amount ? Math.ceil(pre.amount) : '') + '">') +
+      field('อัตราแลกเปลี่ยน', '<input type="number" step="0.0001" name="rate" value="' + d.usdRate + '">', 'w-rate') +
+      field('NAV ที่ขาย', '<input type="number" step="0.0001" name="nav">', 'w-nav') +
+      field('โอนเข้าบัญชี', '<select name="account">' + opts(accounts(), '', true) + '</select>') +
+      field('ใช้ทำอะไร', '<input name="note" placeholder="เช่น ค่ารักษาพยาบาล, เงินไม่พอเดือนนี้">') +
+      '<label class="full"><input type="checkbox" name="refill" checked> ต้องเติมคืนกองนี้ภายหลัง</label>' +
+      '<div class="full muted small" id="w-info"></div></div>',
+    onOpen: root => {
+      const sync = () => {
+        const f = funds.find(x => x.Name === $('select[name=fund]', root).value);
+        $('.w-rate', root).classList.toggle('hidden', f.Currency !== 'USD');
+        $('.w-nav', root).classList.toggle('hidden', f.Kind !== KIND_FUND_UI);
+        const navIn = $('input[name=nav]', root);
+        if (f.Kind === KIND_FUND_UI && !navIn.value) navIn.value = f.nav || '';
+        const amt = num($('input[name=amountTHB]', root).value);
+        $('#w-info', root).innerHTML = 'ยอดในกอง ' + money(f.valueTHB) + (amt ? ' → เหลือ ' + money(f.valueTHB - amt) : '') +
+          (f.Kind === KIND_FUND_UI && amt && num(navIn.value) ? ' · ขาย ' + fmt(amt / num(navIn.value), 4) + ' หน่วย' : '') +
+          '<br>ในสรุปเดือนนี้จะหักออกจากเงินออม (ไม่นับเป็นรายรับ)';
+      };
+      root.addEventListener('input', sync); root.addEventListener('change', sync); sync();
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      if (!num(f.amountTHB)) throw new Error('กรุณาใส่จำนวนเงิน');
+      await api('withdraw', { fund: f.fund, date: f.date, amountTHB: num(f.amountTHB), rate: num(f.rate), nav: num(f.nav), account: f.account, note: f.note, refill: f.refill });
+      toast('บันทึกการดึงเงินแล้ว'); refresh();
     },
   });
 }
@@ -1235,6 +1292,7 @@ PAGES.plan = async token => {
 };
 
 const PLAN_SAVING_TYPE = 'ออม';
+const PLAN_WITHDRAW_TYPE = 'ถอน';
 function rowLabel(r) { return r.label || r.category; }
 
 async function planMonthHtml() {
@@ -1257,6 +1315,7 @@ async function planMonthHtml() {
     let out = '<tr class="pl-sec"><td colspan="' + (p.months.length + 2) + '"><b class="' + cls + '">' + title + '</b></td></tr>';
     rows.forEach(r => {
       if (r.installment) { out += rowHtml(r, 'muted', '&nbsp;&nbsp;↳ ' + esc(rowLabel(r))); return; }
+      if (r.type === PLAN_WITHDRAW_TYPE) { out += rowHtml(r, '', esc(r.category) + ' <span class="muted small">(เช่น จากเงินฉุกเฉิน)</span>'); return; }
       if (r.sub) return;
       const key = r.type + '|' + r.category;
       const open = !!S_open[key];
@@ -1282,9 +1341,9 @@ async function planMonthHtml() {
   const html = '<div class="panel" id="pl-alert" style="margin-bottom:16px"></div>' +
     '<div class="panel" style="margin-bottom:16px"><div class="table-wrap" style="max-height:none"><table class="data plan-grid"><thead><tr><th>หมวด</th>' +
     p.months.map(m => '<th class="num">' + monthLabel(m) + '</th>').join('') + '<th class="num">รวม</th></tr></thead><tbody>' +
-    section('รายรับ', INCOME, 'income') + section('รายจ่าย', EXPENSE, 'expense') + section('เงินออม/ลงทุน', PLAN_SAVING_TYPE, 'saving') +
+    section('รายรับ', INCOME, 'income') + section('รายจ่าย', EXPENSE, 'expense') + section('เงินออม/ลงทุน', PLAN_SAVING_TYPE, 'saving') + section('ดึงเงินออมมาใช้', PLAN_WITHDRAW_TYPE, 'income') +
     '</tbody><tfoot>' +
-    ['income', 'expense', 'saving', 'remaining'].map(k => '<tr><td>' + { income: 'รวมรายรับ', expense: 'รวมรายจ่าย', saving: 'เงินออม', remaining: 'คงเหลือ' }[k] + '</td>' +
+    ['income', 'expense', 'saving', 'withdraw', 'remaining'].map(k => '<tr><td>' + { income: 'รวมรายรับ', expense: 'รวมรายจ่าย', saving: 'เงินออม', withdraw: '+ ดึงจากเงินออม', remaining: 'คงเหลือ' }[k] + '</td>' +
       p.months.map((m, j) => '<td class="num pl-tot" data-k="' + k + '" data-c="' + j + '"></td>').join('') + '<td class="num pl-tot" data-k="' + k + '" data-c="all"></td></tr>').join('') +
     '</tfoot></table></div>' +
     '<p class="muted small">ตัวเลขสีเทา = ค่าตั้งต้นอัตโนมัติ (งบรายหมวด / รายการประจำ / เงินเดือนตามที่ตั้งค่า / เงินออม ' + p.savingPct + '% ของรายรับ) · ' +
@@ -1325,6 +1384,8 @@ async function planMonthHtml() {
   };
 }
 
+function planMonthRerender() { clearApiCache(); refresh(); }
+
 /** คำนวณยอดรวม/คงเหลือ/เตือน/กราฟ ในหน้าแผน (ไม่ต้องโหลดใหม่) */
 function planRecalc() {
   const p = S.planData;
@@ -1350,8 +1411,8 @@ function planRecalc() {
     inp.placeholder = fmt(c.def, 0);
   });
   const tot = p.months.map((m, j) => {
-    const income = sumType(INCOME, j), expense = sumType(EXPENSE, j), saving = sumType(PLAN_SAVING_TYPE, j);
-    return { month: m, income, expense, saving, remaining: income - expense - saving };
+    const income = sumType(INCOME, j), expense = sumType(EXPENSE, j), saving = sumType(PLAN_SAVING_TYPE, j), withdraw = sumType(PLAN_WITHDRAW_TYPE, j);
+    return { month: m, idx: j, income, expense, saving, withdraw, remaining: income - expense - saving + withdraw };
   });
   $$('.pl-tot').forEach(td => {
     const k = td.dataset.k;
@@ -1364,9 +1425,24 @@ function planRecalc() {
   const box = $('#pl-alert');
   box.innerHTML = neg.length
     ? '<b class="expense">⚠️ เงินไม่พอ ' + neg.length + ' เดือน:</b> ' + neg.map(t => monthLabel(t.month) + ' ขาด ฿' + fmt(-t.remaining, 0)).join(' · ') +
-      '<div class="small muted">ลองลดรายจ่าย/เงินออมของเดือนนั้น หรือกันเงินจากเดือนที่เหลือ (รวมทุกเดือน คงเหลือ ฿' + fmt(tot.reduce((a, t) => a + t.remaining, 0), 0) + ')</div>'
+      '<div class="toolbar" style="margin-top:8px"><button type="button" class="btn sm primary" id="pl-fill-all">ดึงเงินออมมาเติมทุกเดือนที่ขาด</button>' +
+      '<span class="small muted">หรือลดรายจ่าย/เงินออมของเดือนนั้น (รวมทุกเดือน คงเหลือ ฿' + fmt(tot.reduce((a, t) => a + t.remaining, 0), 0) + ')</span></div>'
     : '<b class="income">✓ ทุกเดือนในแผนมีเงินพอ</b> <span class="muted small">คงเหลือรวม ' + money(tot.reduce((a, t) => a + t.remaining, 0)) + '</span>';
   box.style.borderColor = neg.length ? 'var(--bad)' : '';
+  const fillBtn = $('#pl-fill-all');
+  if (fillBtn) fillBtn.addEventListener('click', async () => {
+    const wr = p.rows.find(r => r.type === PLAN_WITHDRAW_TYPE);
+    fillBtn.disabled = true;
+    try {
+      for (const t of neg) {
+        const c = wr.cells[t.idx];
+        c.v = Math.ceil(c.v - t.remaining); c.own = true;
+        await api('savePlanCell', t.month, PLAN_WITHDRAW_TYPE, wr.category, c.v, '');
+      }
+      toast('ใส่ยอดดึงจากเงินออมแล้ว ' + neg.length + ' เดือน · ตอนดึงจริงให้กด "ดึงเงินออกมาใช้" ในหน้าเงินออม/ลงทุน');
+      planMonthRerender();
+    } catch (e) { toast(errMsg(e), true); fillBtn.disabled = false; }
+  });
   chart('ch-plan', {
     type: 'bar',
     data: {
@@ -1414,7 +1490,7 @@ async function planCompareHtml() {
   const isYear = period.length === 4;
   const toolbar = '<select id="pv-mode">' + opts([{ value: 'm', label: 'รายเดือน' }, { value: 'y', label: 'ทั้งปี (ถึงเดือนนี้)' }], isYear ? 'y' : 'm') + '</select>' +
     (isYear ? '<select id="pv-year">' + yearOptions(+period) + '</select>' : '<input type="month" id="pv-month" value="' + period + '">');
-  const groups = [[INCOME, 'รายรับ', 'income', true], [EXPENSE, 'รายจ่าย', 'expense', false], [PLAN_SAVING_TYPE, 'เงินออม/ลงทุน', 'saving', true]];
+  const groups = [[INCOME, 'รายรับ', 'income', true], [EXPENSE, 'รายจ่าย', 'expense', false], [PLAN_SAVING_TYPE, 'เงินออม/ลงทุน', 'saving', true], [PLAN_WITHDRAW_TYPE, 'ดึงเงินออมมาใช้', 'expense', false]];
   let body = '';
   groups.forEach(g => {
     const rows = d.rows.filter(r => r.type === g[0]);

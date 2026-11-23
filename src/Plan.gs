@@ -236,10 +236,12 @@ function buildPlan_(months) {
 
   const incomeTotal = j => incomeRows.filter(r => !r.sub).reduce((a, r) => a + r.cells[j].v, 0);
   const savingRows = catRows(PLAN_SAVING_TYPE, PLAN_SAVING, m => incomeTotal(months.indexOf(m)) * s.savingPct / 100);
+  // ดึงจากเงินออมมาใช้ (ค่าตั้งต้น 0 ใส่เองหรือกดปุ่มเติมส่วนที่ขาด)
+  const withdrawRow = { type: PLAN_WITHDRAW_TYPE, category: PLAN_WITHDRAW, cells: months.map(m => cell(m, PLAN_WITHDRAW_TYPE, PLAN_WITHDRAW, 0)) };
 
   return {
     months, savingPct: s.savingPct,
-    rows: incomeRows.concat(expenseRows, instRows, savingRows),
+    rows: incomeRows.concat(expenseRows, instRows, savingRows, [withdrawRow]),
   };
 }
 
@@ -272,8 +274,11 @@ function loanInterestPlan_(months) {
 function planTotals_(plan) {
   return plan.months.map((m, i) => {
     const sum = type => plan.rows.filter(r => r.type === type && !r.sub).reduce((a, r) => a + r.cells[i].v, 0);
-    const income = sum(INCOME), expense = sum(EXPENSE), saving = sum(PLAN_SAVING_TYPE);
-    return { month: m, income: round2_(income), expense: round2_(expense), saving: round2_(saving), remaining: round2_(income - expense - saving) };
+    const income = sum(INCOME), expense = sum(EXPENSE), saving = sum(PLAN_SAVING_TYPE), withdraw = sum(PLAN_WITHDRAW_TYPE);
+    return {
+      month: m, income: round2_(income), expense: round2_(expense), saving: round2_(saving), withdraw: round2_(withdraw),
+      remaining: round2_(income - expense - saving + withdraw),
+    };
   });
 }
 
@@ -291,7 +296,7 @@ function apiSavePlanCell_(month, type, category, amount, item) {
   month = monthStr_(month);
   item = String(item || '');
   if (!month || !category) throw new Error('ข้อมูลไม่ครบ');
-  if ([INCOME, EXPENSE, PLAN_SAVING_TYPE].indexOf(type) < 0) throw new Error('ประเภทไม่ถูกต้อง');
+  if ([INCOME, EXPENSE, PLAN_SAVING_TYPE, PLAN_WITHDRAW_TYPE].indexOf(type) < 0) throw new Error('ประเภทไม่ถูกต้อง');
   deleteWhere_('plan', r => monthStr_(r.Month) === month && r.Type === type && String(r.Category) === category && String(r.Item || '') === item);
   if (amount !== '' && amount !== null && amount !== undefined) {
     appendRows_('plan', [{ Month: month, Type: type, Category: category, Amount: num_(amount), Source: 'manual', Item: item }]);
@@ -378,7 +383,10 @@ function apiPlanVsActual_(period) {
     });
     const sk = key(PLAN_SAVING_TYPE, PLAN_SAVING);
     rows[sk] = rows[sk] || { type: PLAN_SAVING_TYPE, category: PLAN_SAVING, plan: 0, actual: 0 };
-    rows[sk].actual += a.saving;
+    rows[sk].actual += a.deposit;
+    const wk = key(PLAN_WITHDRAW_TYPE, PLAN_WITHDRAW);
+    rows[wk] = rows[wk] || { type: PLAN_WITHDRAW_TYPE, category: PLAN_WITHDRAW, plan: 0, actual: 0 };
+    rows[wk].actual += a.withdraw;
   });
   // รายการย่อย: แผนจากแถวย่อยในแผน, จริงจากรายการที่เลือกรายการย่อยไว้
   const items = {};
@@ -411,7 +419,7 @@ function apiPlanVsActual_(period) {
   const list = Object.keys(rows).map(k => rows[k])
     .filter(r => r.plan || r.actual)
     .map(r => Object.assign(r, { plan: round2_(r.plan), actual: round2_(r.actual), diff: round2_(r.actual - r.plan) }));
-  const order = { [INCOME]: 0, [EXPENSE]: 1, [PLAN_SAVING_TYPE]: 2 };
+  const order = { [INCOME]: 0, [EXPENSE]: 1, [PLAN_SAVING_TYPE]: 2, [PLAN_WITHDRAW_TYPE]: 3 };
   list.sort((a, b) => order[a.type] - order[b.type] || b.plan - a.plan);
   return { period, months, rows: list };
 }
@@ -435,7 +443,7 @@ function apiProjection_() {
   }, 0);
 
   const income0 = totals.reduce((a, t) => a + t.income, 0);
-  const saving0 = totals.reduce((a, t) => a + t.saving, 0);
+  const saving0 = totals.reduce((a, t) => a + t.saving - t.withdraw, 0);
   const inst0 = instIn(months[0], months[11]);
   const expenseBase0 = totals.reduce((a, t) => a + t.expense, 0) - inst0;
   let balance = fundsValuation_().reduce((a, f) => a + f.valueTHB, 0);

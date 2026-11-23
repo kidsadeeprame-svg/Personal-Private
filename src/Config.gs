@@ -11,7 +11,7 @@ const SPREADSHEET_ID = '';
 const TZ = 'Asia/Bangkok';
 
 // เพิ่มเลขนี้เมื่อเปลี่ยนโครงสร้างแท็บ เพื่อให้หัวคอลัมน์ถูกอัปเดตอัตโนมัติ
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const INCOME = 'รายรับ';
 const EXPENSE = 'รายจ่าย';
@@ -34,6 +34,8 @@ const LOAN_CLOSED = 'ปิดยอด';
 
 const PLAN_SAVING_TYPE = 'ออม';
 const PLAN_SAVING = 'เงินออม/ลงทุน';
+const PLAN_WITHDRAW_TYPE = 'ถอน';
+const PLAN_WITHDRAW = 'ดึงจากเงินออม';
 const SALARY_CATEGORY = 'เงินเดือน';
 const BONUS_CATEGORY = 'โบนัส';
 
@@ -48,8 +50,8 @@ const SHEETS = {
   tx:            { name: 'App_Transactions',  headers: ['ID', 'Date', 'Type', 'Category', 'Amount', 'Account', 'Note', 'ReceiptUrl', 'Source', 'CreatedAt', 'Item'] },
   recurring:     { name: 'App_Recurring',     headers: ['ID', 'Name', 'Type', 'Category', 'Amount', 'Account', 'DayOfMonth', 'Active', 'LastPostedMonth', 'Item'], text: ['LastPostedMonth'] },
   funds:         { name: 'App_Funds',         headers: ['Name', 'Currency', 'Goal', 'Active', 'Kind', 'NAV', 'NavDate'] },
-  contributions: { name: 'App_Contributions', headers: ['ID', 'BatchID', 'Date', 'Fund', 'Currency', 'AmountFX', 'Rate', 'AmountTHB', 'Account', 'Note', 'Source', 'Units'] },
-  snapshots:     { name: 'App_FundSnapshots', headers: ['ID', 'Month', 'Fund', 'Currency', 'ValueFX', 'Rate', 'ValueTHB'], text: ['Month'] },
+  contributions: { name: 'App_Contributions', headers: ['ID', 'BatchID', 'Date', 'Fund', 'Currency', 'AmountFX', 'Rate', 'AmountTHB', 'Account', 'Note', 'Source', 'Units', 'Cash', 'Refill', 'CreatedAt'] },
+  snapshots:     { name: 'App_FundSnapshots', headers: ['ID', 'Month', 'Fund', 'Currency', 'ValueFX', 'Rate', 'ValueTHB', 'SavedAt'], text: ['Month'] },
   loans:         { name: 'App_Loans',         headers: ['LoanID', 'Borrower', 'Date', 'Principal', 'SourceAccount', 'InterestType', 'InterestRate', 'InterestNote', 'DueDate', 'PayAccountNo', 'Bank', 'Note', 'Closed'], text: ['PayAccountNo'] },
   loanPayments:  { name: 'App_LoanPayments',  headers: ['ID', 'LoanID', 'Date', 'Total', 'Interest', 'Principal', 'Note'] },
   tax:           { name: 'App_Tax',           headers: ['Year', 'IncomeOverride', 'Withheld', 'Ded_Expense', 'Ded_Personal', 'Ded_Family', 'Ded_Insurance', 'Ded_SocialSecurity', 'Ded_Fund', 'Ded_Property', 'Ded_Other', 'TaxOverride', 'Note'] },
