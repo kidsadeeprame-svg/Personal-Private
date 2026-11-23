@@ -319,6 +319,13 @@ function apiSavePlanItem_(i) {
       const col = SHEETS.plan.headers.indexOf('Item') + 1;
       readTable_('plan').filter(r => r.Type === old.Type && String(r.Category) === String(old.Category) && String(r.Item || '') === String(old.Name))
         .forEach(r => sh.getRange(r._row, col).setValue(name));
+      // รายการจริงและรายการประจำที่เลือกรายการย่อยนี้ไว้ เปลี่ยนชื่อตาม
+      ['tx', 'recurring'].forEach(key => {
+        const tsh = sheet_(key);
+        const tcol = SHEETS[key].headers.indexOf('Item') + 1;
+        readTable_(key).filter(r => r.Type === old.Type && String(r.Category) === String(old.Category) && String(r.Item || '') === String(old.Name))
+          .forEach(r => tsh.getRange(r._row, tcol).setValue(name));
+      });
     }
     return updateById_('planItems', 'ID', i.ID, row);
   }
@@ -370,6 +377,34 @@ function apiPlanVsActual_(period) {
     const sk = key(PLAN_SAVING_TYPE, PLAN_SAVING);
     rows[sk] = rows[sk] || { type: PLAN_SAVING_TYPE, category: PLAN_SAVING, plan: 0, actual: 0 };
     rows[sk].actual += a.saving;
+  });
+  // รายการย่อย: แผนจากแถวย่อยในแผน, จริงจากรายการที่เลือกรายการย่อยไว้
+  const items = {};
+  plan.rows.filter(r => r.sub && r.item).forEach(r => {
+    const k = key(r.type, r.category) + '|' + r.item;
+    items[k] = items[k] || { item: r.item, plan: 0, actual: 0 };
+    items[k].plan += r.cells.reduce((a, c) => a + c.v, 0);
+  });
+  months.forEach(m => {
+    const a = agg[m];
+    if (!a) return;
+    Object.keys(a.byItem).forEach(k => {
+      items[k] = items[k] || { item: k.split('|')[2], plan: 0, actual: 0 };
+      items[k].actual += a.byItem[k];
+    });
+  });
+  Object.keys(items).forEach(k => {
+    const ck = k.split('|').slice(0, 2).join('|');
+    if (!rows[ck]) return;
+    (rows[ck].items = rows[ck].items || []).push(items[k]);
+  });
+  Object.keys(rows).forEach(k => {
+    const r = rows[k];
+    if (!r.items) return;
+    const rest = r.actual - r.items.reduce((a, i) => a + i.actual, 0);
+    if (Math.abs(rest) > 0.005) r.items.push({ item: '', unassigned: true, plan: 0, actual: rest });
+    r.items = r.items.filter(i => i.plan || i.actual)
+      .map(i => Object.assign(i, { plan: round2_(i.plan), actual: round2_(i.actual), diff: round2_(i.actual - i.plan) }));
   });
   const list = Object.keys(rows).map(k => rows[k])
     .filter(r => r.plan || r.actual)

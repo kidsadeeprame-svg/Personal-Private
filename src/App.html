@@ -58,6 +58,26 @@ function opts(list, selected, withBlank) {
 const cats = (type, includeName) => S.boot.categories.filter(c => c.Type === type && (c.Active || c.Name === includeName)).map(c => c.Name);
 const accounts = include => S.boot.accounts.filter(a => a.Active || a.Name === include).map(a => a.Name);
 const activeFunds = () => S.boot.funds.filter(f => f.Active);
+const itemsOf = (type, cat) => (S.boot.planItems || []).filter(i => i.Type === type && i.Category === cat).map(i => i.Name);
+/** ช่องเลือกรายการย่อย (แสดงเมื่อหมวดมีรายการย่อยในแผน) */
+function itemFieldHtml(type, cat, selected) {
+  const list = itemsOf(type, cat);
+  if (selected && list.indexOf(selected) < 0) list.push(selected);
+  return '<label class="field item-field' + (list.length ? '' : ' hidden') + '"><span>รายการย่อย</span><select name="Item">' +
+    '<option value="">— ไม่ระบุ —</option>' + opts(list, selected) + '</select></label>';
+}
+function bindItemField(root) {
+  const sync = () => {
+    const f = readForm(root);
+    const list = itemsOf(f.Type, f.Category);
+    const box = $('.item-field', root);
+    $('select[name=Item]', box).innerHTML = '<option value="">— ไม่ระบุ —</option>' + opts(list, f.Item);
+    box.classList.toggle('hidden', !list.length);
+  };
+  $('select[name=Category]', root).addEventListener('change', sync);
+  $$('input[name=Type]', root).forEach(r => r.addEventListener('change', sync));
+}
+const catLabel = t => esc(t.Category) + (t.Item ? ' <span class="muted">› ' + esc(t.Item) + '</span>' : '');
 
 function field(label, html, cls) { return '<label class="field ' + (cls || '') + '"><span>' + label + '</span>' + html + '</label>'; }
 
@@ -287,7 +307,7 @@ function recurringMiniHtml(list) {
  * ========================================================= */
 function txModal(t, after) {
   const isNew = !t;
-  t = t || { Type: EXPENSE, Date: today(), Amount: '', Category: '', Account: '', Note: '', ReceiptUrl: '' };
+  t = t || { Type: EXPENSE, Date: today(), Amount: '', Category: '', Account: '', Note: '', ReceiptUrl: '', Item: '' };
   const catOpts = type => opts(cats(type, t.Category), t.Category, true);
   openModal({
     title: isNew ? 'บันทึกรายการ' : 'แก้ไขรายการ',
@@ -298,8 +318,9 @@ function txModal(t, after) {
       field('วันที่', '<input type="date" name="Date" required value="' + esc(t.Date) + '">') +
       field('จำนวนเงิน (บาท)', '<input type="number" step="0.01" name="Amount" required value="' + esc(t.Amount) + '" inputmode="decimal">') +
       field('หมวด', '<select name="Category" required>' + catOpts(t.Type) + '</select>') +
+      itemFieldHtml(t.Type, t.Category, t.Item) +
       field('บัญชี', '<select name="Account">' + opts(accounts(t.Account), t.Account, true) + '</select>') +
-      field('รายละเอียด', '<input name="Note" value="' + esc(t.Note) + '" placeholder="เช่น ค่าข้าวกลางวัน">', 'full') +
+      field('รายละเอียด', '<input name="Note" value="' + esc(t.Note) + '" placeholder="เช่น ค่าขนมสัปดาห์นี้">', 'full') +
       field('รูปใบเสร็จ (ไม่บังคับ)', '<input type="file" name="file" accept="image/*,application/pdf">' +
         (t.ReceiptUrl ? '<span class="small">ไฟล์เดิม: <a href="' + esc(t.ReceiptUrl) + '" target="_blank">เปิดดู</a> <label><input type="checkbox" name="removeReceipt"> ลบไฟล์แนบ</label></span>' : ''), 'full') +
       '</div>',
@@ -307,6 +328,7 @@ function txModal(t, after) {
       $$('input[name=Type]', root).forEach(r => r.addEventListener('change', () => {
         $('select[name=Category]', root).innerHTML = catOpts(readForm(root).Type);
       }));
+      bindItemField(root);
       $('input[name=Amount]', root).focus();
     },
     noFocus: true,
@@ -318,7 +340,7 @@ function txModal(t, after) {
       let url = f.removeReceipt ? '' : t.ReceiptUrl;
       const uploaded = await uploadIfAny($('input[name=file]', form), 'receipt');
       if (uploaded) url = uploaded;
-      await api('saveTransaction', { ID: t.ID, Date: f.Date, Type: f.Type, Category: f.Category, Amount: num(f.Amount), Account: f.Account, Note: f.Note, ReceiptUrl: url });
+      await api('saveTransaction', { ID: t.ID, Date: f.Date, Type: f.Type, Category: f.Category, Amount: num(f.Amount), Account: f.Account, Note: f.Note, ReceiptUrl: url, Item: f.Item || '' });
       delete S.txCache[f.Date.slice(0, 4)];
       if (t.Date) delete S.txCache[t.Date.slice(0, 4)];
       toast('บันทึกแล้ว');
@@ -355,7 +377,7 @@ async function txListHtml(token) {
   const list = all.filter(t =>
     (!F.month || t.Date.slice(5, 7) === F.month) && (!F.type || t.Type === F.type) &&
     (!F.cat || t.Category === F.cat) && (!F.acc || t.Account === F.acc) &&
-    (!q || (t.Note + ' ' + t.Category + ' ' + t.Account).toLowerCase().indexOf(q) >= 0));
+    (!q || (t.Note + ' ' + t.Category + ' ' + t.Item + ' ' + t.Account).toLowerCase().indexOf(q) >= 0));
   const inc = list.filter(t => t.Type === INCOME).reduce((s, t) => s + t.Amount, 0);
   const exp = list.filter(t => t.Type === EXPENSE).reduce((s, t) => s + t.Amount, 0);
   const shown = list.slice(0, 500);
@@ -369,7 +391,7 @@ async function txListHtml(token) {
     '</div>' +
     '<div class="toolbar small" style="margin-bottom:8px"><span>' + list.length + ' รายการ</span><span class="income">รายรับ ' + money(inc) + '</span><span class="expense">รายจ่าย ' + money(exp) + '</span><span>สุทธิ ' + money(inc - exp) + '</span></div>' +
     '<div class="table-wrap"><table class="data"><thead><tr><th>วันที่</th><th>หมวด</th><th>รายละเอียด</th><th>บัญชี</th><th class="num">จำนวน</th><th></th></tr></thead><tbody>' +
-    (shown.length ? shown.map(t => '<tr><td>' + dateLabel(t.Date) + '</td><td>' + esc(t.Category) + '</td><td>' + esc(t.Note) +
+    (shown.length ? shown.map(t => '<tr><td>' + dateLabel(t.Date) + '</td><td>' + catLabel(t) + '</td><td>' + esc(t.Note) +
       (t.Source.indexOf('import') === 0 ? ' <span class="badge">นำเข้า</span>' : t.Source.indexOf('recurring') === 0 ? ' <span class="badge info">ประจำ</span>' : '') +
       '</td><td>' + esc(t.Account) + '</td><td class="num ' + (t.Type === INCOME ? 'income' : 'expense') + '">' + (t.Type === INCOME ? '+' : '−') + fmt(t.Amount) + '</td><td style="white-space:nowrap">' +
       (t.ReceiptUrl ? '<a class="icon-btn" href="' + esc(t.ReceiptUrl) + '" target="_blank" title="ใบเสร็จ">📎</a>' : '') +
@@ -426,11 +448,15 @@ function recurringModal(r) {
       '<label><input type="radio" name="Type" value="' + INCOME + '"' + (r.Type === INCOME ? ' checked' : '') + '>รายรับ</label></div></div>' +
       field('ชื่อรายการ', '<input name="Name" required value="' + esc(r.Name) + '" placeholder="เช่น กยศ., ค่าเน็ตบ้าน">', 'full') +
       field('หมวด', '<select name="Category">' + catOpts(r.Type) + '</select>') +
+      itemFieldHtml(r.Type, r.Category, r.Item) +
       field('จำนวนเงินปกติ', '<input type="number" step="0.01" name="Amount" value="' + esc(r.Amount) + '">') +
       field('บัญชี', '<select name="Account">' + opts(accounts(r.Account), r.Account, true) + '</select>') +
       field('วันที่ของเดือน', '<input type="number" min="1" max="31" name="DayOfMonth" value="' + esc(r.DayOfMonth) + '">') +
       '<label class="full"><input type="checkbox" name="Active"' + (r.Active ? ' checked' : '') + '> ใช้งาน</label></div>',
-    onOpen: root => $$('input[name=Type]', root).forEach(x => x.addEventListener('change', () => { $('select[name=Category]', root).innerHTML = catOpts(readForm(root).Type); })),
+    onOpen: root => {
+      $$('input[name=Type]', root).forEach(x => x.addEventListener('change', () => { $('select[name=Category]', root).innerHTML = catOpts(readForm(root).Type); }));
+      bindItemField(root);
+    },
     onSubmit: async form => {
       const f = readForm(form);
       if (!f.Category) throw new Error('กรุณาเลือกหมวด');
@@ -447,7 +473,7 @@ async function recurringHtml(token) {
     '<span style="flex:1"></span><button class="btn" id="rec-add">+ เพิ่มรายการประจำ</button><button class="btn primary" id="rec-post">บันทึกรายการที่เลือก</button></div>' +
     '<table class="data"><thead><tr><th style="width:30px"><input type="checkbox" id="rec-all"></th><th>รายการ</th><th>หมวด</th><th>บัญชี</th><th class="num">วันที่</th><th class="num" style="width:140px">จำนวนเงิน</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
     (list.length ? list.map(r => '<tr' + (r.Active ? '' : ' class="muted"') + '><td>' + (r.Active && !r.Posted ? '<input type="checkbox" class="rec-chk" value="' + esc(r.ID) + '" checked>' : '') + '</td>' +
-      '<td>' + esc(r.Name) + '</td><td><span class="' + (r.Type === INCOME ? 'income' : 'expense') + '">' + esc(r.Type) + '</span> · ' + esc(r.Category) + '</td><td>' + esc(r.Account) + '</td>' +
+      '<td>' + esc(r.Name) + '</td><td><span class="' + (r.Type === INCOME ? 'income' : 'expense') + '">' + esc(r.Type) + '</span> · ' + catLabel(r) + '</td><td>' + esc(r.Account) + '</td>' +
       '<td class="num">' + r.DayOfMonth + '</td><td class="num">' + (r.Active && !r.Posted ? '<input type="number" step="0.01" class="rec-amt" data-id="' + esc(r.ID) + '" value="' + r.Amount + '" style="width:120px;text-align:right">' : fmt(r.Amount)) + '</td>' +
       '<td>' + (!r.Active ? '<span class="badge">ปิดใช้งาน</span>' : r.Posted ? '<span class="badge ok">บันทึกแล้ว</span>' : '<span class="badge warn">ยังไม่บันทึก</span>') + '</td>' +
       '<td style="white-space:nowrap"><button class="icon-btn" data-redit="' + esc(r.ID) + '">✏️</button><button class="icon-btn" data-rdel="' + esc(r.ID) + '">🗑</button></td></tr>').join('')
@@ -1188,12 +1214,14 @@ function planItemModal(it) {
     onOpen: root => {
       const del = $('#pi-del', root);
       if (del) del.addEventListener('click', () => confirmAction('ลบรายการย่อย "' + it.Name + '" และตัวเลขที่แก้ไว้ทุกเดือน?', async () => {
-        await api('deletePlanItem', it.ID); closeModal(); toast('ลบแล้ว'); refresh();
+        await api('deletePlanItem', it.ID); S.boot = await api('bootstrap'); closeModal(); toast('ลบแล้ว'); refresh();
       }));
     },
     onSubmit: async form => {
       const f = readForm(form);
       await api('savePlanItem', { ID: it.ID, Type: it.Type, Category: it.Category, Name: f.Name, DefaultAmount: num(f.DefaultAmount) });
+      S.boot = await api('bootstrap');
+      S.txCache = {};
       S.planOpen[it.Type + '|' + it.Category] = true;
       toast('บันทึกแล้ว'); refresh();
     },
@@ -1215,8 +1243,14 @@ async function planCompareHtml() {
     body += '<tr><td colspan="5"><b class="' + g[2] + '">' + g[1] + '</b></td></tr>' + rows.map(r => {
       const good = g[3] ? r.diff >= 0 : r.diff <= 0;
       const pct = r.plan ? r.actual / r.plan * 100 : 0;
-      return '<tr><td>&nbsp;&nbsp;' + esc(r.category) + '</td><td class="num">' + fmt(r.plan) + '</td><td class="num">' + fmt(r.actual) + '</td><td class="num ' + (r.diff ? (good ? 'income' : 'expense') : 'muted') + '">' +
-        (r.diff > 0 ? '+' : r.diff < 0 ? '−' : '') + fmt(Math.abs(r.diff)) + '</td><td style="width:180px">' + (r.plan ? barHtml(pct, g[3] ? (pct >= 100 ? 'ok' : 'warn') : (pct > 100 ? 'bad' : pct >= 80 ? 'warn' : 'ok')) + '<span class="small muted">' + fmt(pct, 0) + '%</span>' : '<span class="badge warn">นอกแผน</span>') + '</td></tr>';
+      const line = (label, x, cls) => {
+        const gd = g[3] ? x.diff >= 0 : x.diff <= 0;
+        const pc = x.plan ? x.actual / x.plan * 100 : 0;
+        return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td>' + label + '</td><td class="num">' + fmt(x.plan) + '</td><td class="num">' + fmt(x.actual) + '</td><td class="num ' + (x.diff ? (gd ? 'income' : 'expense') : 'muted') + '">' +
+          (x.diff > 0 ? '+' : x.diff < 0 ? '−' : '') + fmt(Math.abs(x.diff)) + '</td><td style="width:180px">' + (x.plan ? barHtml(pc, g[3] ? (pc >= 100 ? 'ok' : 'warn') : (pc > 100 ? 'bad' : pc >= 80 ? 'warn' : 'ok')) + '<span class="small muted">' + fmt(pc, 0) + '%</span>' : (x.unassigned ? '<span class="badge">ไม่ระบุรายการย่อย</span>' : '<span class="badge warn">นอกแผน</span>')) + '</td></tr>';
+      };
+      return line('&nbsp;&nbsp;' + esc(r.category), r) +
+        (r.items || []).map(i => line('&nbsp;&nbsp;&nbsp;&nbsp;<span class="muted">↳ ' + (i.unassigned ? 'ไม่ระบุ' : esc(i.item)) + '</span>', i, 'pv-item')).join('');
     }).join('') + '<tr><td><b>รวม' + g[1] + '</b></td><td class="num"><b>' + fmt(tp) + '</b></td><td class="num"><b>' + fmt(ta) + '</b></td><td class="num"><b>' + (ta - tp >= 0 ? '+' : '−') + fmt(Math.abs(ta - tp)) + '</b></td><td></td></tr>';
   });
   const html = '<div class="panel"><p class="muted small" style="margin-top:0">' + (isYear ? 'รวม ' + d.months.length + ' เดือน (' + monthLabel(d.months[0]) + ' – ' + monthLabel(d.months[d.months.length - 1]) + ')' : monthLabel(period)) +

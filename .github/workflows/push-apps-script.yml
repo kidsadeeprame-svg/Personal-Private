@@ -1,0 +1,54 @@
+# ส่งโค้ดใน src/ ไปยังโปรเจกต์ Apps Script อัตโนมัติ ทุกครั้งที่มีการ push เข้า main
+# (ส่งโค้ดอย่างเดียว ยังไม่ Deploy — กด Deploy → New version เองในหน้า Apps Script)
+#
+# ต้องตั้ง GitHub secrets 2 ตัว (Settings → Secrets and variables → Actions):
+#   APPS_SCRIPT_ID  = Script ID ของโปรเจกต์ (Apps Script → Project Settings → IDs)
+#   CLASPRC_JSON    = เนื้อหาไฟล์ ~/.clasprc.json หลังรัน `npx @google/clasp@2.4.2 login` บนเครื่องตัวเอง
+# ดูขั้นตอนเต็มใน README หัวข้อ "อัปเดตโค้ดอัตโนมัติ"
+
+name: Push to Apps Script
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/**']
+  workflow_dispatch:
+
+concurrency:
+  group: apps-script-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare clasp config
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$APPS_SCRIPT_ID" ]; then
+            echo "::error::ยังไม่ได้ตั้ง secret CLASPRC_JSON หรือ APPS_SCRIPT_ID (ดู README หัวข้อ อัปเดตโค้ดอัตโนมัติ)"
+            exit 1
+          fi
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          printf '{"scriptId":"%s","rootDir":"src"}' "$APPS_SCRIPT_ID" > .clasp.json
+
+      - name: Push code to Apps Script
+        run: npx --yes @google/clasp@2.4.2 push --force
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "### ✅ ส่งโค้ดเข้า Apps Script แล้ว" >> "$GITHUB_STEP_SUMMARY"
+          echo "ขั้นต่อไป: Apps Script → การทำให้ใช้งานได้ → จัดการการทำให้ใช้งานได้ → ✏️ → เวอร์ชันใหม่ → ทำให้ใช้งานได้" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$HOME/.clasprc.json" .clasp.json

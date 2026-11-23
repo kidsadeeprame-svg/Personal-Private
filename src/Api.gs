@@ -98,6 +98,7 @@ function apiBootstrap_() {
     accounts: readTable_('accounts').map(a => ({ Name: String(a.Name), Active: isActive_(a.Active) })),
     funds: readTable_('funds').map(f => ({ Name: String(f.Name), Currency: f.Currency || 'THB', Goal: f.Goal, Active: isActive_(f.Active) })),
     healthItems: healthItems_(),
+    planItems: planItems_().map(i => ({ Type: i.Type, Category: i.Category, Name: i.Name })),
     usdRate: usdRate_(),
     interestCategory: INTEREST_CATEGORY,
     goals: [GOAL_EMERGENCY, GOAL_RETIREMENT, GOAL_OTHER],
@@ -116,6 +117,7 @@ function txOut_(t) {
   return {
     ID: String(t.ID), Date: fmtDate_(t.Date), Type: t.Type, Category: String(t.Category), Amount: num_(t.Amount),
     Account: String(t.Account || ''), Note: String(t.Note || ''), ReceiptUrl: String(t.ReceiptUrl || ''), Source: String(t.Source || ''),
+    Item: String(t.Item || ''),
   };
 }
 
@@ -134,7 +136,7 @@ function apiSaveTransaction_(t) {
   if (!amount) throw new Error('กรุณากรอกจำนวนเงิน');
   const row = {
     Date: toDate_(t.Date), Type: t.Type, Category: t.Category, Amount: amount,
-    Account: t.Account || '', Note: t.Note || '', ReceiptUrl: t.ReceiptUrl || '',
+    Account: t.Account || '', Note: t.Note || '', ReceiptUrl: t.ReceiptUrl || '', Item: t.Item || '',
   };
   if (t.ID) {
     return txOut_(updateById_('tx', 'ID', t.ID, row));
@@ -151,7 +153,7 @@ function apiDeleteTransaction_(id) {
 }
 
 function emptyAgg_() {
-  return { income: 0, expense: 0, saving: 0, interest: 0, byCat: {} };
+  return { income: 0, expense: 0, saving: 0, interest: 0, byCat: {}, byItem: {} };
 }
 
 /** รวมยอดรายเดือน: รายรับ (รวมดอกเบี้ยเงินให้ยืม), รายจ่าย, เงินออม */
@@ -165,6 +167,7 @@ function aggregateByMonth_() {
     if (t.Type === INCOME) a.income += amt; else a.expense += amt;
     const k = t.Type + '|' + t.Category;
     a.byCat[k] = (a.byCat[k] || 0) + amt;
+    if (t.Item) { const ki = k + '|' + t.Item; a.byItem[ki] = (a.byItem[ki] || 0) + amt; }
   });
   readTable_('contributions').forEach(c => {
     const m = monthStr_(c.Date);
@@ -219,7 +222,7 @@ function apiRecurring_(month) {
   return readTable_('recurring').map(r => ({
     ID: String(r.ID), Name: String(r.Name), Type: r.Type, Category: r.Category, Amount: num_(r.Amount),
     Account: r.Account, DayOfMonth: num_(r.DayOfMonth) || 1, Active: isActive_(r.Active),
-    LastPostedMonth: monthStr_(r.LastPostedMonth), Posted: monthStr_(r.LastPostedMonth) >= month,
+    LastPostedMonth: monthStr_(r.LastPostedMonth), Posted: monthStr_(r.LastPostedMonth) >= month, Item: String(r.Item || ''),
   }));
 }
 
@@ -228,7 +231,7 @@ function apiSaveRecurring_(r) {
   if (r.Type !== INCOME && r.Type !== EXPENSE) throw new Error('ประเภทไม่ถูกต้อง');
   const row = {
     Name: r.Name, Type: r.Type, Category: r.Category, Amount: num_(r.Amount), Account: r.Account || '',
-    DayOfMonth: Math.min(31, Math.max(1, num_(r.DayOfMonth) || 1)), Active: r.Active !== false,
+    DayOfMonth: Math.min(31, Math.max(1, num_(r.DayOfMonth) || 1)), Active: r.Active !== false, Item: r.Item || '',
   };
   if (r.ID) return updateById_('recurring', 'ID', r.ID, row);
   row.ID = newId_('R');
@@ -255,7 +258,7 @@ function apiPostRecurring_(ids, month, amounts) {
     if (!amount) return;
     tx.push({
       ID: newId_('T'), Date: toDate_(month + '-' + ('0' + day).slice(-2)), Type: r.Type, Category: r.Category,
-      Amount: amount, Account: r.Account, Note: r.Name, ReceiptUrl: '', Source: 'recurring:' + r.ID, CreatedAt: now,
+      Amount: amount, Account: r.Account, Note: r.Name, ReceiptUrl: '', Source: 'recurring:' + r.ID, CreatedAt: now, Item: r.Item || '',
     });
     updateById_('recurring', 'ID', r.ID, { LastPostedMonth: month });
   });

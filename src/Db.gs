@@ -3,8 +3,19 @@
  * ทุกแท็บของแอปเป็นตาราง: แถว 1 = หัวคอลัมน์, แถว 2 เป็นต้นไป = ข้อมูล 1 แถวต่อ 1 รายการ
  */
 
+/**
+ * ชีตที่ใช้เก็บข้อมูล เรียงลำดับ:
+ * 1) SPREADSHEET_ID ใน Config.gs
+ * 2) Script property ชื่อ SPREADSHEET_ID (ตั้งใน Apps Script → Project Settings → Script properties)
+ *    แนะนำวิธีนี้ถ้าอัปเดตโค้ดอัตโนมัติด้วย clasp เพราะโค้ดใหม่จะไม่ทับค่า
+ * 3) ชีตที่สคริปต์ผูกอยู่ (สร้างจาก ส่วนขยาย → Apps Script)
+ */
 function ss_() {
-  return SPREADSHEET_ID ? SpreadsheetApp.openById(SPREADSHEET_ID) : SpreadsheetApp.getActive();
+  const id = SPREADSHEET_ID || PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  if (id) return SpreadsheetApp.openById(id);
+  const active = SpreadsheetApp.getActive();
+  if (!active) throw new Error('ไม่รู้ว่าต้องใช้ชีตไหน: ตั้ง Script property ชื่อ SPREADSHEET_ID (Project Settings → Script properties)');
+  return active;
 }
 
 function sheet_(key) {

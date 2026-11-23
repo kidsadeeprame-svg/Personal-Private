@@ -11,7 +11,7 @@ const SPREADSHEET_ID = '';
 const TZ = 'Asia/Bangkok';
 
 // เพิ่มเลขนี้เมื่อเปลี่ยนโครงสร้างแท็บ เพื่อให้หัวคอลัมน์ถูกอัปเดตอัตโนมัติ
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const INCOME = 'รายรับ';
 const EXPENSE = 'รายจ่าย';
@@ -38,8 +38,8 @@ const SHEETS = {
   config:        { name: 'App_Config',        headers: ['Key', 'Value', 'Description'] },
   categories:    { name: 'App_Categories',    headers: ['Type', 'Name', 'MonthlyBudget', 'Active'] },
   accounts:      { name: 'App_Accounts',      headers: ['Name', 'Active'] },
-  tx:            { name: 'App_Transactions',  headers: ['ID', 'Date', 'Type', 'Category', 'Amount', 'Account', 'Note', 'ReceiptUrl', 'Source', 'CreatedAt'] },
-  recurring:     { name: 'App_Recurring',     headers: ['ID', 'Name', 'Type', 'Category', 'Amount', 'Account', 'DayOfMonth', 'Active', 'LastPostedMonth'], text: ['LastPostedMonth'] },
+  tx:            { name: 'App_Transactions',  headers: ['ID', 'Date', 'Type', 'Category', 'Amount', 'Account', 'Note', 'ReceiptUrl', 'Source', 'CreatedAt', 'Item'] },
+  recurring:     { name: 'App_Recurring',     headers: ['ID', 'Name', 'Type', 'Category', 'Amount', 'Account', 'DayOfMonth', 'Active', 'LastPostedMonth', 'Item'], text: ['LastPostedMonth'] },
   funds:         { name: 'App_Funds',         headers: ['Name', 'Currency', 'Goal', 'Active'] },
   contributions: { name: 'App_Contributions', headers: ['ID', 'BatchID', 'Date', 'Fund', 'Currency', 'AmountFX', 'Rate', 'AmountTHB', 'Account', 'Note', 'Source'] },
   snapshots:     { name: 'App_FundSnapshots', headers: ['ID', 'Month', 'Fund', 'Currency', 'ValueFX', 'Rate', 'ValueTHB'], text: ['Month'] },
