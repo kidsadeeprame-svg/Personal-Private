@@ -99,10 +99,18 @@ function updateFromGitHub(force) {
   const code = res.getResponseCode();
   if (code !== 200) {
     const text = res.getContentText();
-    if (/has not been used|is disabled|not enabled|SERVICE_DISABLED/i.test(text)) {
-      throw new Error('ยังไม่ได้เปิด Google Apps Script API: เปิดที่ https://script.google.com/home/usersettings แล้วลองใหม่ (อาจต้องรอ 2–3 นาที)');
+    let detail = text;
+    try { detail = JSON.parse(text).error.message || text; } catch (e) { /* ไม่ใช่ JSON */ }
+    Logger.log('Apps Script API error ' + code + ': ' + text);
+    const link = (String(detail).match(/https:\/\/console\.(?:developers|cloud)\.google\.com\/\S+/) || [])[0];
+    if (link) {
+      // API ยังไม่เปิดในโปรเจกต์ Google Cloud ที่ผูกกับสคริปต์ (คนละที่กับสวิตช์ในหน้าตั้งค่าผู้ใช้)
+      throw new Error('ต้องเปิด Apps Script API ในโปรเจกต์ Google Cloud ของสคริปต์: เปิดลิงก์นี้แล้วกด "เปิดใช้" (Enable) รอ 1–2 นาทีแล้วรันใหม่ → ' + link.replace(/[.,)]+$/, ''));
     }
-    throw new Error('อัปเดตโค้ดไม่สำเร็จ (' + code + '): ' + text.slice(0, 300));
+    if (/User has not enabled the Apps Script API/i.test(detail)) {
+      throw new Error('สวิตช์ Google Apps Script API ในหน้า https://script.google.com/home/usersettings ยังไม่มีผล (ถ้าเพิ่งเปิด รอ 5–10 นาทีแล้วรันใหม่)');
+    }
+    throw new Error('อัปเดตโค้ดไม่สำเร็จ (' + code + '): ' + String(detail).slice(0, 400));
   }
   props.setProperty('CODE_SHA', sha);
   props.setProperty('CODE_UPDATED_AT', Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'));
