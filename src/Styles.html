@@ -110,6 +110,13 @@ table.data tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
 .lines-table td { padding: 4px; } .lines-table input, .lines-table select { width: 100%; }
 .grid-editor input, .grid-editor select { width: 100%; padding: 5px 7px; }
 .grid-editor td { padding: 3px 4px; }
+.plan-grid td, .plan-grid th { padding: 3px 4px; }
+.plan-grid .pl-name { white-space: nowrap; position: sticky; left: 0; background: var(--panel); z-index: 1; }
+.plan-grid th:first-child { position: sticky; left: 0; z-index: 2; }
+.pl-cell { width: 84px; text-align: right; padding: 4px 6px; border-color: transparent; background: transparent; color: var(--muted); }
+.pl-cell:hover { border-color: var(--line); }
+.pl-cell.own { color: var(--text); font-weight: 600; }
+.plan-grid tfoot td { white-space: nowrap; }
 
 @media (max-width: 720px) {
   .sidebar { width: 60px; padding: 10px 6px; } .sidebar span { display: none; } .brand { padding: 4px 8px 12px; }

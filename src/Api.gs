@@ -51,11 +51,22 @@ const API_ = {
   getTable: apiGetTable_,
   saveTable: apiSaveTable_,
   upload: apiUpload_,
+  plan: apiPlan_,
+  savePlanCell: apiSavePlanCell_,
+  resetPlanMonth: apiResetPlanMonth_,
+  planVsActual: apiPlanVsActual_,
+  projection: apiProjection_,
+  importPlan: importLegacyPlan,
+  installments: apiInstallments_,
+  saveInstallment: apiSaveInstallment_,
+  deleteInstallment: apiDeleteInstallment_,
+  postInstallments: apiPostInstallments_,
 };
 
 const WRITE_APIS_ = ['saveTransaction', 'deleteTransaction', 'saveRecurring', 'deleteRecurring', 'postRecurring',
   'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'saveLoan', 'deleteLoan',
-  'savePayment', 'deletePayment', 'saveTax', 'saveVisit', 'deleteVisit', 'saveTable'];
+  'savePayment', 'deletePayment', 'saveTax', 'saveVisit', 'deleteVisit', 'saveTable',
+  'savePlanCell', 'resetPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments'];
 
 function api(name, argsJson) {
   guard_();
@@ -75,6 +86,7 @@ function api(name, argsJson) {
 /* ============ ทั่วไป ============ */
 
 function apiBootstrap_() {
+  ensureReady_();
   return {
     title: APP_TITLE,
     today: fmtDate_(new Date()),
@@ -523,7 +535,7 @@ function apiDeleteVisit_(id) {
 /* ============ ตั้งค่า ============ */
 
 const EDITABLE_TABLES_ = ['categories', 'accounts', 'funds', 'healthItems', 'taxBrackets', 'config'];
-const HIDDEN_CONFIG_ = ['USD_THB', 'DRIVE_FOLDER_ID', 'IMPORT_DONE'];
+const HIDDEN_CONFIG_ = ['USD_THB', 'DRIVE_FOLDER_ID', 'IMPORT_DONE', 'PLAN_IMPORT_DONE'];
 
 function apiGetTable_(key) {
   if (EDITABLE_TABLES_.indexOf(key) < 0) throw new Error('แก้ไขตารางนี้ไม่ได้');
@@ -611,6 +623,15 @@ function apiDashboard_(month) {
     .map(l => ({ LoanID: l.LoanID, Borrower: l.Borrower, remaining: l.remaining, DueDate: l.DueDate, status: l.status, monthlyInterest: l.monthlyInterest }));
 
   const recurringPending = apiRecurring_(month).filter(r => r.Active && !r.Posted);
+  const installmentsPending = apiInstallments_(month).filter(i => i.dueThisMonth)
+    .map(i => ({ ID: i.ID, Name: i.Name, Category: i.Category, Amount: Math.min(i.Monthly, i.remaining || i.Monthly), Type: EXPENSE, paid: i.paidCount, months: i.Months }));
+
+  // แผนเดือนนี้ + เดือนข้างหน้าที่คาดว่าเงินไม่พอ
+  const now = monthStr_(new Date());
+  const plan = buildPlan_(monthRange_(month, 1));
+  const planNow = planTotals_(plan)[0];
+  const future = planTotals_(buildPlan_(monthRange_(now, 12)));
+  const planAlerts = future.filter(t => t.remaining < 0);
 
   return {
     month,
@@ -621,6 +642,6 @@ function apiDashboard_(month) {
     },
     budgets, expenseByCat, trend, goals,
     loans: { total: round2_(openLoans.reduce((s, l) => s + l.remaining, 0)), list: openLoans },
-    recurringPending,
+    recurringPending, installmentsPending, planNow, planAlerts,
   };
 }

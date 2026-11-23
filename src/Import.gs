@@ -88,6 +88,7 @@ function importLegacy() {
 
 function removeImported() {
   return withLock_(() => {
+    ensureReady_();
     const isImp = r => String(r.Source || '').indexOf('import') === 0;
     const a = deleteWhere_('tx', isImp);
     const b = deleteWhere_('contributions', isImp);
@@ -95,9 +96,11 @@ function removeImported() {
     const loanIds = readTable_('loans').map(r => String(r.LoanID));
     const d = deleteWhere_('loanPayments', r => String(r.Note || '').indexOf('[import]') >= 0 || loanIds.indexOf(String(r.LoanID)) < 0);
     const e = deleteWhere_('tax', r => String(r.Note || '').indexOf('[import]') >= 0);
+    const f = deleteWhere_('plan', r => String(r.Source || '') === 'import');
     setConfig_('IMPORT_DONE', '');
+    setConfig_('PLAN_IMPORT_DONE', '');
     return 'ลบข้อมูลที่นำเข้าแล้ว: รายรับ-รายจ่าย ' + a + ', เงินออม ' + b + ', เงินให้ยืม ' + c +
-      ', งวดผ่อน ' + d + ', ภาษี ' + e;
+      ', งวดผ่อน ' + d + ', ภาษี ' + e + ', แผน ' + f + ' ช่อง';
   });
 }
 

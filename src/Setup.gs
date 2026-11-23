@@ -7,6 +7,7 @@ function onOpen() {
     .createMenu('💰 แอปการเงิน')
     .addItem('1) ติดตั้ง / สร้างแท็บของแอป', 'setup')
     .addItem('2) นำเข้าข้อมูลเก่า', 'importLegacyMenu')
+    .addItem('3) นำเข้าแผนล่วงหน้าจาก Expen Life', 'importPlanMenu')
     .addSeparator()
     .addItem('ลบข้อมูลที่นำเข้า (เพื่อนำเข้าใหม่)', 'removeImportedMenu')
     .addItem('เปิดเว็บแอป', 'showWebAppLink')
@@ -66,6 +67,10 @@ function importLegacyMenu() {
   notify_(importLegacy());
 }
 
+function importPlanMenu() {
+  notify_(importLegacyPlan());
+}
+
 function removeImportedMenu() {
   const ui = SpreadsheetApp.getUi();
   const ok = ui.alert('ลบข้อมูลที่นำเข้าจากแท็บเดิมทั้งหมด?',
@@ -107,8 +112,21 @@ function filesFolder_(kind) {
 
 function getConfig_() {
   const out = {};
+  // ค่าเริ่มต้นสำหรับคีย์ที่ยังไม่มีในแท็บ (เช่น หลังอัปเดตโค้ดเวอร์ชันใหม่)
+  DEFAULTS.config.forEach(d => { if (String(d.Value).charAt(0) !== '=') out[d.Key] = d.Value; });
   readTable_('config').forEach(r => { out[r.Key] = r.Value; });
   return out;
+}
+
+/** สร้างแท็บ/ค่าตั้งค่าที่ขาดอัตโนมัติ (หลังอัปเดตโค้ดไม่ต้องรัน setup เอง) */
+function ensureReady_() {
+  const ss = ss_();
+  const missing = Object.keys(SHEETS).some(k => !ss.getSheetByName(SHEETS[k].name));
+  if (missing) ensureSheets_();
+  if (!ss.getSheetByName(SHEETS.config.name)) return;
+  const have = readTable_('config').map(r => r.Key);
+  const add = DEFAULTS.config.filter(r => have.indexOf(r.Key) < 0);
+  if (add.length) appendRows_('config', add);
 }
 
 function setConfig_(key, value) {

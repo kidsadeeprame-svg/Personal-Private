@@ -182,6 +182,15 @@ PAGES.dashboard = async token => {
     cardHtml('อัตราการออม', fmt(c.savingRate, 1) + '%', rateCls, 'เป้า ' + c.savingTarget + '% ของรายรับ') +
     '</div>';
 
+  if (d.planAlerts.length) {
+    html += '<div class="panel" style="margin-bottom:16px;border-color:var(--bad)"><b class="expense">⚠️ เดือนที่แผนคาดว่าเงินไม่พอ:</b> ' +
+      d.planAlerts.map(a => monthLabel(a.month) + ' (ขาด ฿' + fmt(-a.remaining, 0) + ')').join(' · ') +
+      ' <a class="small" data-go="plan">ไปที่แผน →</a></div>';
+  }
+  const pn = d.planNow;
+  html += '<div class="panel" style="margin-bottom:16px"><h2>แผนเดือนนี้ vs จริง<span class="spacer"></span><a class="small" data-go="plan">ดูแผน →</a></h2><div class="grid cards" style="margin:0">' +
+    planCmpCard('รายรับ', pn.income, c.income, true) + planCmpCard('รายจ่าย', pn.expense, c.expense, false) +
+    planCmpCard('เงินออม', pn.saving, c.saving, true) + planCmpCard('คงเหลือ', pn.remaining, c.remaining, true) + '</div></div>';
   html += '<div class="grid three" style="margin-bottom:16px">' +
     '<div class="panel"><h2>แนวโน้ม 12 เดือน</h2><div class="chart-box"><canvas id="ch-trend"></canvas></div></div>' +
     '<div class="panel"><h2>งบประมาณรายหมวด · ' + monthLabel(month) + '</h2>' + budgetsHtml(d.budgets) + '</div></div>';
@@ -190,7 +199,7 @@ PAGES.dashboard = async token => {
     '<div class="panel"><h2>เป้าหมายการออม<span class="spacer"></span><a class="small" data-go="invest">ดูทั้งหมด →</a></h2>' + goalsHtml(d.goals) + '</div>' +
     '<div class="panel"><h2>เงินให้ยืมที่ยังค้าง<span class="spacer"></span><span class="badge info">' + money(d.loans.total) + '</span></h2>' + loansMiniHtml(d.loans.list) + '</div>' +
     '<div class="panel"><h2>รายจ่ายตามหมวด · ' + monthLabel(month) + '</h2>' + expenseCatHtml(d.expenseByCat, c.expense) + '</div>' +
-    '<div class="panel"><h2>รายการประจำที่ยังไม่บันทึกเดือนนี้</h2>' + recurringMiniHtml(d.recurringPending) + '</div>' +
+    '<div class="panel"><h2>รายการประจำที่ยังไม่บันทึกเดือนนี้</h2>' + recurringMiniHtml(d.recurringPending.concat(d.installmentsPending.map(i => Object.assign({}, i, { Name: i.Name + ' (งวด ' + (i.paid + 1) + '/' + i.months + ')', inst: true })))) + '</div>' +
     '</div>';
   $('#main').innerHTML = html;
 
@@ -201,7 +210,9 @@ PAGES.dashboard = async token => {
   if (postAll) postAll.addEventListener('click', async () => {
     try {
       const n = await api('postRecurring', d.recurringPending.map(r => r.ID), thisMonth());
-      toast('บันทึกแล้ว ' + n + ' รายการ'); refresh();
+      const m = d.installmentsPending.length ? await api('postInstallments', d.installmentsPending.map(i => i.ID), thisMonth()) : 0;
+      S.txCache = {};
+      toast('บันทึกแล้ว ' + (n + m) + ' รายการ'); refresh();
     } catch (e) { toast(errMsg(e), true); }
   });
 
@@ -257,6 +268,13 @@ function expenseCatHtml(list, total) {
   return list.map(x => '<div class="budget-row"><div class="top"><span>' + esc(x.category) + '</span><span class="small muted">' + money(x.amount) + ' · ' +
     fmt(total ? x.amount / total * 100 : 0, 1) + '%</span></div>' + barHtml(total ? x.amount / total * 100 : 0) + '</div>').join('');
 }
+function planCmpCard(label, plan, actual, higherIsGood) {
+  const diff = actual - plan;
+  const good = higherIsGood ? diff >= 0 : diff <= 0;
+  return '<div class="card"><div class="label">' + label + '</div><div class="value">' + money(actual) + '</div><div class="sub">แผน ' + money(plan) +
+    (plan || actual ? ' · <span class="' + (good ? 'income' : 'expense') + '">' + (diff >= 0 ? '+' : '−') + fmt(Math.abs(diff)) + '</span>' : '') + '</div></div>';
+}
+
 function recurringMiniHtml(list) {
   if (!list.length) return '<div class="empty">บันทึกครบแล้ว ✓</div>';
   return '<table class="data"><tbody>' + list.map(r => '<tr><td>' + esc(r.Name) + ' <span class="muted small">' + esc(r.Category) + '</span></td><td class="num ' +
@@ -993,6 +1011,269 @@ function gridRows(s) {
     });
     return o;
   });
+}
+
+
+/* =========================================================
+ * แผน / คาดการณ์
+ * ========================================================= */
+PAGES.plan = async token => {
+  const tab = S.planTab || 'month';
+  const tabs = '<div class="tabs">' + [['month', 'แผนรายเดือน'], ['compare', 'แผน vs จริง'], ['long', 'คาดการณ์ถึงเกษียณ'], ['inst', 'แผนผ่อน']]
+    .map(t => '<a data-tab="' + t[0] + '" class="' + (tab === t[0] ? 'active' : '') + '">' + t[1] + '</a>').join('') + '</div>';
+  const body = tab === 'month' ? await planMonthHtml() : tab === 'compare' ? await planCompareHtml() : tab === 'long' ? await planLongHtml() : await instHtml();
+  if (stale(token)) return;
+  $('#main').innerHTML = head('แผน / คาดการณ์', body.toolbar || '') + tabs + body.html;
+  $$('.tabs a').forEach(a => a.addEventListener('click', () => { S.planTab = a.dataset.tab; refresh(); }));
+  body.bind && body.bind();
+};
+
+const PLAN_SAVING_TYPE = 'ออม';
+function rowLabel(r) { return r.label || r.category; }
+
+async function planMonthHtml() {
+  const start = S.planStart || thisMonth();
+  const count = S.planCount || 12;
+  const p = await api('plan', start, count);
+  S.planData = p;
+  const toolbar = '<span class="small muted">เริ่ม</span><input type="month" id="pl-start" value="' + start + '">' +
+    '<select id="pl-count">' + opts([{ value: 6, label: '6 เดือน' }, { value: 12, label: '12 เดือน' }, { value: 24, label: '24 เดือน' }], count) + '</select>' +
+    (p.planImportDone ? '' : '<button class="btn" id="pl-import">นำเข้าแผนจาก Expen Life</button>');
+  const section = (title, type, cls) => {
+    const rows = p.rows.map((r, i) => Object.assign({ idx: i }, r)).filter(r => r.type === type);
+    return '<tr class="pl-sec"><td colspan="' + (p.months.length + 2) + '"><b class="' + cls + '">' + title + '</b></td></tr>' +
+      rows.map(r => '<tr><td class="pl-name' + (r.installment ? ' muted' : '') + '">' + (r.installment ? '&nbsp;&nbsp;↳ ' : '') + esc(rowLabel(r)) + '</td>' +
+        r.cells.map((c, j) => '<td class="num">' + (c.readonly
+          ? '<span class="muted">' + (c.v ? fmt(c.v, 0) : '-') + '</span>'
+          : '<input class="pl-cell' + (c.own ? ' own' : '') + '" data-r="' + r.idx + '" data-c="' + j + '" value="' + (c.v ? Math.round(c.v * 100) / 100 : '') + '" placeholder="' + (c.def ? fmt(c.def, 0) : '0') + '" title="' +
+            (c.own ? 'แก้เอง' + (c.src === 'import' ? ' (นำเข้าจาก Expen Life)' : '') + ' · ค่าตั้งต้น ' + fmt(c.def) + ' · ลบตัวเลขเพื่อกลับไปใช้ค่าตั้งต้น' : 'ค่าตั้งต้น') + '">') + '</td>').join('') +
+        '<td class="num pl-rowsum" data-r="' + r.idx + '"></td></tr>').join('');
+  };
+  const html = '<div class="panel" id="pl-alert" style="margin-bottom:16px"></div>' +
+    '<div class="panel" style="margin-bottom:16px"><div class="table-wrap" style="max-height:none"><table class="data plan-grid"><thead><tr><th>หมวด</th>' +
+    p.months.map(m => '<th class="num">' + monthLabel(m) + '</th>').join('') + '<th class="num">รวม</th></tr></thead><tbody>' +
+    section('รายรับ', INCOME, 'income') + section('รายจ่าย', EXPENSE, 'expense') + section('เงินออม/ลงทุน', PLAN_SAVING_TYPE, 'saving') +
+    '</tbody><tfoot>' +
+    ['income', 'expense', 'saving', 'remaining'].map(k => '<tr><td>' + { income: 'รวมรายรับ', expense: 'รวมรายจ่าย', saving: 'เงินออม', remaining: 'คงเหลือ' }[k] + '</td>' +
+      p.months.map((m, j) => '<td class="num pl-tot" data-k="' + k + '" data-c="' + j + '"></td>').join('') + '<td class="num pl-tot" data-k="' + k + '" data-c="all"></td></tr>').join('') +
+    '</tfoot></table></div>' +
+    '<p class="muted small">ตัวเลขสีเทา = ค่าตั้งต้นอัตโนมัติ (งบรายหมวด / รายการประจำ / เงินเดือนตามที่ตั้งค่า / เงินออม ' + p.savingPct + '% ของรายรับ) · ' +
+    '<b>ตัวหนา</b> = แก้เองหรือนำเข้า · พิมพ์ตัวเลขแล้วกด Enter/Tab บันทึกอัตโนมัติ · ลบตัวเลขให้ว่างเพื่อกลับไปใช้ค่าตั้งต้น · แถว "ผ่อน" มาจากแท็บ แผนผ่อน</p></div>' +
+    '<div class="panel"><h2>กราฟแผน</h2><div class="chart-box"><canvas id="ch-plan"></canvas></div></div>';
+  return {
+    toolbar, html,
+    bind: () => {
+      $('#pl-start').addEventListener('change', e => { S.planStart = e.target.value; refresh(); });
+      $('#pl-count').addEventListener('change', e => { S.planCount = +e.target.value; refresh(); });
+      const imp = $('#pl-import');
+      if (imp) imp.addEventListener('click', () => confirmAction('นำเข้าแผน 12 เดือนข้างหน้าจากแท็บ Expen Life และ Income? (ช่องที่แก้เองไว้แล้วจะไม่ถูกทับ)', async () => {
+        toast(await api('importPlan')); refresh();
+      }));
+      $$('.pl-cell').forEach(inp => {
+        inp.addEventListener('focus', () => inp.select());
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+        inp.addEventListener('change', async () => {
+          const r = S.planData.rows[+inp.dataset.r], c = r.cells[+inp.dataset.c];
+          const raw = inp.value.trim();
+          const clear = raw === '';
+          c.own = !clear; c.v = clear ? c.def : num(raw);
+          if (clear) { c.src = ''; inp.value = c.def ? c.def : ''; }
+          inp.classList.toggle('own', c.own);
+          planRecalc();
+          try { await api('savePlanCell', S.planData.months[+inp.dataset.c], r.type, r.category, clear ? '' : num(raw)); }
+          catch (e) { toast(errMsg(e), true); }
+        });
+      });
+      planRecalc();
+    },
+  };
+}
+
+/** คำนวณยอดรวม/คงเหลือ/เตือน/กราฟ ในหน้าแผน (ไม่ต้องโหลดใหม่) */
+function planRecalc() {
+  const p = S.planData;
+  // เงินออมที่ยังไม่แก้เอง = % ของรายรับ
+  const savingRow = p.rows.find(r => r.type === PLAN_SAVING_TYPE);
+  const sumType = (type, j) => p.rows.filter(r => r.type === type).reduce((a, r) => a + r.cells[j].v, 0);
+  p.months.forEach((m, j) => {
+    const c = savingRow.cells[j];
+    c.def = Math.round(sumType(INCOME, j) * p.savingPct) / 100;
+    if (!c.own) c.v = c.def;
+  });
+  $$('.pl-cell').forEach(inp => {
+    const r = p.rows[+inp.dataset.r];
+    if (r.type !== PLAN_SAVING_TYPE) return;
+    const c = r.cells[+inp.dataset.c];
+    if (!c.own && document.activeElement !== inp) inp.value = c.v ? Math.round(c.v * 100) / 100 : '';
+    inp.placeholder = fmt(c.def, 0);
+  });
+  const tot = p.months.map((m, j) => {
+    const income = sumType(INCOME, j), expense = sumType(EXPENSE, j), saving = sumType(PLAN_SAVING_TYPE, j);
+    return { month: m, income, expense, saving, remaining: income - expense - saving };
+  });
+  $$('.pl-tot').forEach(td => {
+    const k = td.dataset.k;
+    const v = td.dataset.c === 'all' ? tot.reduce((a, t) => a + t[k], 0) : tot[+td.dataset.c][k];
+    td.textContent = fmt(v, 0);
+    td.className = 'num pl-tot' + (k === 'remaining' && v < 0 ? ' expense' : '');
+  });
+  $$('.pl-rowsum').forEach(td => { td.textContent = fmt(p.rows[+td.dataset.r].cells.reduce((a, c) => a + c.v, 0), 0); });
+  const neg = tot.filter(t => t.remaining < 0);
+  const box = $('#pl-alert');
+  box.innerHTML = neg.length
+    ? '<b class="expense">⚠️ เงินไม่พอ ' + neg.length + ' เดือน:</b> ' + neg.map(t => monthLabel(t.month) + ' ขาด ฿' + fmt(-t.remaining, 0)).join(' · ') +
+      '<div class="small muted">ลองลดรายจ่าย/เงินออมของเดือนนั้น หรือกันเงินจากเดือนที่เหลือ (รวมทุกเดือน คงเหลือ ฿' + fmt(tot.reduce((a, t) => a + t.remaining, 0), 0) + ')</div>'
+    : '<b class="income">✓ ทุกเดือนในแผนมีเงินพอ</b> <span class="muted small">คงเหลือรวม ' + money(tot.reduce((a, t) => a + t.remaining, 0)) + '</span>';
+  box.style.borderColor = neg.length ? 'var(--bad)' : '';
+  chart('ch-plan', {
+    type: 'bar',
+    data: {
+      labels: tot.map(t => monthLabel(t.month)),
+      datasets: [
+        { type: 'bar', label: 'รายรับ', data: tot.map(t => t.income), backgroundColor: cssVar('--income') },
+        { type: 'bar', label: 'รายจ่าย', data: tot.map(t => t.expense), backgroundColor: cssVar('--expense') },
+        { type: 'bar', label: 'เงินออม', data: tot.map(t => t.saving), backgroundColor: cssVar('--saving') },
+        { type: 'line', label: 'คงเหลือ', data: tot.map(t => t.remaining), borderColor: cssVar('--text'), backgroundColor: cssVar('--text'), tension: .2 },
+      ],
+    },
+    options: { maintainAspectRatio: false, animation: false, scales: { y: { ticks: moneyTick } }, plugins: { tooltip: moneyTooltip } },
+  });
+}
+
+async function planCompareHtml() {
+  const period = S.pvPeriod || thisMonth();
+  const d = await api('planVsActual', period);
+  const isYear = period.length === 4;
+  const toolbar = '<select id="pv-mode">' + opts([{ value: 'm', label: 'รายเดือน' }, { value: 'y', label: 'ทั้งปี (ถึงเดือนนี้)' }], isYear ? 'y' : 'm') + '</select>' +
+    (isYear ? '<select id="pv-year">' + yearOptions(+period) + '</select>' : '<input type="month" id="pv-month" value="' + period + '">');
+  const groups = [[INCOME, 'รายรับ', 'income', true], [EXPENSE, 'รายจ่าย', 'expense', false], [PLAN_SAVING_TYPE, 'เงินออม/ลงทุน', 'saving', true]];
+  let body = '';
+  groups.forEach(g => {
+    const rows = d.rows.filter(r => r.type === g[0]);
+    if (!rows.length) return;
+    const tp = rows.reduce((a, r) => a + r.plan, 0), ta = rows.reduce((a, r) => a + r.actual, 0);
+    body += '<tr><td colspan="5"><b class="' + g[2] + '">' + g[1] + '</b></td></tr>' + rows.map(r => {
+      const good = g[3] ? r.diff >= 0 : r.diff <= 0;
+      const pct = r.plan ? r.actual / r.plan * 100 : 0;
+      return '<tr><td>&nbsp;&nbsp;' + esc(r.category) + '</td><td class="num">' + fmt(r.plan) + '</td><td class="num">' + fmt(r.actual) + '</td><td class="num ' + (r.diff ? (good ? 'income' : 'expense') : 'muted') + '">' +
+        (r.diff > 0 ? '+' : r.diff < 0 ? '−' : '') + fmt(Math.abs(r.diff)) + '</td><td style="width:180px">' + (r.plan ? barHtml(pct, g[3] ? (pct >= 100 ? 'ok' : 'warn') : (pct > 100 ? 'bad' : pct >= 80 ? 'warn' : 'ok')) + '<span class="small muted">' + fmt(pct, 0) + '%</span>' : '<span class="badge warn">นอกแผน</span>') + '</td></tr>';
+    }).join('') + '<tr><td><b>รวม' + g[1] + '</b></td><td class="num"><b>' + fmt(tp) + '</b></td><td class="num"><b>' + fmt(ta) + '</b></td><td class="num"><b>' + (ta - tp >= 0 ? '+' : '−') + fmt(Math.abs(ta - tp)) + '</b></td><td></td></tr>';
+  });
+  const html = '<div class="panel"><p class="muted small" style="margin-top:0">' + (isYear ? 'รวม ' + d.months.length + ' เดือน (' + monthLabel(d.months[0]) + ' – ' + monthLabel(d.months[d.months.length - 1]) + ')' : monthLabel(period)) +
+    ' · รายจ่าย: ใช้น้อยกว่าแผน = สีเขียว · รายรับ/เงินออม: ได้มากกว่าแผน = สีเขียว</p>' +
+    '<table class="data"><thead><tr><th>หมวด</th><th class="num">แผน</th><th class="num">จริง</th><th class="num">ต่าง</th><th>% ของแผน</th></tr></thead><tbody>' +
+    (body || '<tr><td colspan="5" class="empty">ไม่มีข้อมูล</td></tr>') + '</tbody></table></div>';
+  return {
+    toolbar, html,
+    bind: () => {
+      $('#pv-mode').addEventListener('change', e => { S.pvPeriod = e.target.value === 'y' ? String(thisYear()) : thisMonth(); refresh(); });
+      const m = $('#pv-month'); if (m) m.addEventListener('change', e => { S.pvPeriod = e.target.value; refresh(); });
+      const y = $('#pv-year'); if (y) y.addEventListener('change', e => { S.pvPeriod = e.target.value; refresh(); });
+    },
+  };
+}
+
+async function planLongHtml() {
+  const d = await api('projection');
+  const s = d.settings;
+  const be = y => y + 543;
+  const html = '<div class="grid cards">' +
+    cardHtml('เงินออม/ลงทุนตอนนี้', money(d.startBalance), 'saving') +
+    cardHtml('เป้าเกษียณ', money(s.target), '', 'เกษียณอายุ ' + s.retireAge + (s.birthYear ? ' (พ.ศ. ' + be(s.birthYear + s.retireAge) + ')' : '')) +
+    (d.reach ? cardHtml('ถึงเป้าประมาณ', 'พ.ศ. ' + be(d.reach.year), 'income', d.reach.age ? 'อายุ ' + d.reach.age + ' ปี' : '')
+      : cardHtml('ถึงเป้าประมาณ', 'ยังไม่ถึง', 'expense', 'ตามสมมติฐานปัจจุบัน')) +
+    cardHtml('ยอดตอนเกษียณ', '฿' + fmt(d.rows.length ? d.rows[d.rows.length - 1].balance : 0, 0), 'saving') + '</div>' +
+    '<div class="panel" style="margin-bottom:16px"><h2>เงินออมสะสม vs เป้า<span class="spacer"></span><a class="small" data-go="settings">แก้สมมติฐาน →</a></h2><div class="chart-box"><canvas id="ch-long"></canvas></div>' +
+    '<p class="muted small">สมมติฐาน: เงินเดือนขึ้น ' + fmt(s.growth * 100, 1) + '%/ปี · เงินเฟ้อ (รายจ่าย) ' + fmt(s.inflation * 100, 1) + '%/ปี · ผลตอบแทน ' + fmt(s.ret * 100, 1) + '%/ปี · ' + esc(d.note) + '</p></div>' +
+    '<div class="panel"><div class="table-wrap"><table class="data"><thead><tr><th>ช่วง</th><th class="num">อายุ</th><th class="num">รายรับ</th><th class="num">รายจ่าย</th><th class="num">เงินออม</th><th class="num">คงเหลือ</th><th class="num">เงินออมสะสม</th></tr></thead><tbody>' +
+    d.rows.map((r, i) => '<tr' + (d.reach && d.reach.index === i ? ' style="background:var(--primary-weak)"' : '') + '><td>' + monthLabel(r.from) + ' – ' + monthLabel(r.to) + '</td><td class="num">' + (r.age || '') +
+      '</td><td class="num">' + fmt(r.income, 0) + '</td><td class="num">' + fmt(r.expense, 0) + '</td><td class="num">' + fmt(r.saving, 0) + '</td><td class="num ' + (r.remaining < 0 ? 'expense' : '') + '">' + fmt(r.remaining, 0) +
+      '</td><td class="num saving"><b>' + fmt(r.balance, 0) + '</b></td></tr>').join('') + '</tbody></table></div></div>';
+  return {
+    html,
+    bind: () => {
+      $$('[data-go]').forEach(a => a.addEventListener('click', () => go(a.dataset.go)));
+      chart('ch-long', {
+        type: 'line',
+        data: {
+          labels: d.rows.map(r => r.age ? 'อายุ ' + r.age : String(be(r.year))),
+          datasets: [
+            { label: 'เงินออมสะสม', data: d.rows.map(r => r.balance), borderColor: cssVar('--saving'), backgroundColor: cssVar('--saving'), tension: .2 },
+            { label: 'เป้าเกษียณ', data: d.rows.map(() => s.target), borderColor: cssVar('--bad'), borderDash: [6, 4], pointRadius: 0 },
+          ],
+        },
+        options: { maintainAspectRatio: false, scales: { y: { ticks: moneyTick } }, plugins: { tooltip: moneyTooltip } },
+      });
+    },
+  };
+}
+
+function instModal(i) {
+  const isNew = !i;
+  i = i || { Name: '', Total: '', Months: 10, StartMonth: thisMonth(), Monthly: '', Category: 'หนี้สิน/ผ่อน', Account: '', DayOfMonth: 25, Note: '' };
+  openModal({
+    title: isNew ? 'เพิ่มแผนผ่อน' : 'แก้ไขแผนผ่อน',
+    body: '<div class="form-grid">' +
+      field('ซื้ออะไร', '<input name="Name" value="' + esc(i.Name) + '" placeholder="เช่น คอมพิวเตอร์">', 'full') +
+      field('ราคารวม (บาท)', '<input type="number" step="0.01" name="Total" value="' + esc(i.Total) + '">') +
+      field('จำนวนงวด (เดือน)', '<input type="number" min="1" name="Months" value="' + esc(i.Months) + '">') +
+      field('เดือนเริ่มผ่อน', '<input type="month" name="StartMonth" value="' + esc(i.StartMonth) + '">') +
+      field('ค่างวด/เดือน (เว้นว่าง = ราคา ÷ งวด)', '<input type="number" step="0.01" name="Monthly" value="' + esc(isNew ? '' : i.Monthly) + '">') +
+      field('หมวด', '<select name="Category">' + opts(cats(EXPENSE, i.Category), i.Category, true) + '</select>') +
+      field('จ่ายด้วยบัญชี/บัตร', '<select name="Account">' + opts(accounts(i.Account), i.Account, true) + '</select>') +
+      field('วันตัดบัตร/วันจ่าย', '<input type="number" min="1" max="31" name="DayOfMonth" value="' + esc(i.DayOfMonth) + '">') +
+      field('หมายเหตุ', '<input name="Note" value="' + esc(i.Note) + '">') +
+      '<div class="full muted" id="inst-sum"></div></div>',
+    onOpen: root => {
+      const recalc = () => {
+        const f = readForm(root);
+        const n = Math.max(1, num(f.Months)), m = num(f.Monthly) || num(f.Total) / n;
+        let end = '';
+        if (f.StartMonth) { const d = new Date(+f.StartMonth.slice(0, 4), +f.StartMonth.slice(5, 7) - 1 + n - 1, 1); end = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+        $('#inst-sum', root).textContent = 'งวดละ ' + money(m) + ' × ' + n + ' งวด' + (end ? ' · ผ่อนถึง ' + monthLabel(end) : '');
+      };
+      root.addEventListener('input', recalc); recalc();
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      if (!num(f.Total)) throw new Error('กรุณาใส่ราคารวม');
+      await api('saveInstallment', Object.assign({ ID: i.ID }, f, { Total: num(f.Total), Months: num(f.Months), Monthly: num(f.Monthly), DayOfMonth: num(f.DayOfMonth) }));
+      toast('บันทึกแล้ว'); refresh();
+    },
+  });
+}
+
+async function instHtml() {
+  const month = thisMonth();
+  const list = await api('installments', month);
+  const active = list.filter(i => !i.done);
+  const due = list.filter(i => i.dueThisMonth);
+  const toolbar = '<button class="btn primary" id="inst-add">+ เพิ่มแผนผ่อน</button>';
+  const html = '<div class="grid cards">' + cardHtml('ยอดผ่อนคงเหลือ', money(active.reduce((a, i) => a + i.remaining, 0)), 'expense', active.length + ' รายการ') +
+    cardHtml('ค่างวดต่อเดือน (ตอนนี้)', money(list.filter(i => !i.done && month >= i.StartMonth && month <= i.EndMonth).reduce((a, i) => a + i.Monthly, 0))) +
+    cardHtml('ต้องบันทึกเดือนนี้', due.length + ' งวด', due.length ? 'expense' : 'income') + '</div>' +
+    '<div class="panel"><div class="toolbar" style="margin-bottom:10px"><span style="flex:1"></span>' + (due.length ? '<button class="btn primary sm" id="inst-post">บันทึกงวดเดือนนี้ (' + due.length + ')</button>' : '') + '</div>' +
+    '<table class="data"><thead><tr><th>รายการ</th><th>หมวด / บัญชี</th><th class="num">ราคา</th><th class="num">งวดละ</th><th>ช่วงผ่อน</th><th style="width:200px">ความคืบหน้า</th><th class="num">คงเหลือ</th><th></th></tr></thead><tbody>' +
+    (list.length ? list.map(i => '<tr' + (i.done ? ' class="muted"' : '') + '><td>' + esc(i.Name) + (i.dueThisMonth ? ' <span class="badge warn">ยังไม่บันทึกงวดเดือนนี้</span>' : '') + (i.done ? ' <span class="badge ok">ผ่อนครบ</span>' : '') +
+      '</td><td>' + esc(i.Category) + '<div class="small muted">' + esc(i.Account) + '</div></td><td class="num">' + fmt(i.Total) + '</td><td class="num">' + fmt(i.Monthly) + '</td><td>' + monthLabel(i.StartMonth) + ' – ' + monthLabel(i.EndMonth) +
+      '</td><td>' + barHtml(i.paidCount / i.Months * 100, i.done ? 'ok' : '') + '<span class="small muted">' + i.paidCount + '/' + i.Months + ' งวด · จ่ายแล้ว ' + fmt(i.paidAmount) + '</span></td><td class="num"><b>' + fmt(i.remaining) +
+      '</b></td><td style="white-space:nowrap"><button class="icon-btn" data-iedit="' + esc(i.ID) + '">✏️</button><button class="icon-btn" data-idel="' + esc(i.ID) + '">🗑</button></td></tr>').join('')
+      : '<tr><td colspan="8" class="empty">ยังไม่มีแผนผ่อน — กด "เพิ่มแผนผ่อน" เมื่อซื้อของชิ้นใหญ่</td></tr>') + '</tbody></table>' +
+    '<p class="muted small">งวดผ่อนจะขึ้นในแผนรายเดือนอัตโนมัติ และขึ้นเตือนในหน้าภาพรวมทุกเดือนจนกว่าจะผ่อนครบ (กดบันทึกแล้วจะเป็นรายจ่ายจริงในหมวดที่เลือก)</p></div>';
+  return {
+    toolbar, html,
+    bind: () => {
+      $('#inst-add').addEventListener('click', () => instModal(null));
+      const post = $('#inst-post');
+      if (post) post.addEventListener('click', async () => {
+        try { const n = await api('postInstallments', due.map(i => i.ID), month); S.txCache = {}; toast('บันทึกแล้ว ' + n + ' งวด'); refresh(); } catch (e) { toast(errMsg(e), true); }
+      });
+      $$('[data-iedit]').forEach(b => b.addEventListener('click', () => instModal(list.find(i => i.ID === b.dataset.iedit))));
+      $$('[data-idel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบแผนผ่อนนี้? (งวดที่บันทึกเป็นรายจ่ายไปแล้วไม่ถูกลบ)', async () => {
+        await api('deleteInstallment', b.dataset.idel); toast('ลบแล้ว'); refresh();
+      })));
+    },
+  };
 }
 
 /* ---------- เริ่มต้น ---------- */

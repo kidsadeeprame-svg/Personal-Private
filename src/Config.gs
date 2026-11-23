@@ -22,6 +22,11 @@ const LOAN_OPEN = 'ค้างชำระ';
 const LOAN_OVERDUE = 'เกินกำหนด';
 const LOAN_CLOSED = 'ปิดยอด';
 
+const PLAN_SAVING_TYPE = 'ออม';
+const PLAN_SAVING = 'เงินออม/ลงทุน';
+const SALARY_CATEGORY = 'เงินเดือน';
+const BONUS_CATEGORY = 'โบนัส';
+
 /**
  * โครงสร้างแท็บที่เว็บใช้ (สร้างให้อัตโนมัติเมื่อรัน setup)
  * text: คอลัมน์ที่บังคับให้เป็นข้อความ (กันชีตแปลง "2026-11" เป็นวันที่)
@@ -42,6 +47,8 @@ const SHEETS = {
   healthItems:   { name: 'App_HealthItems',   headers: ['Name', 'Unit', 'Min', 'Max', 'Group', 'Order', 'Active'] },
   healthVisits:  { name: 'App_HealthVisits',  headers: ['VisitID', 'Date', 'Hospital', 'FileUrl', 'Note'] },
   healthResults: { name: 'App_HealthResults', headers: ['VisitID', 'Item', 'Value'] },
+  plan:          { name: 'App_Plan',          headers: ['Month', 'Type', 'Category', 'Amount', 'Source'], text: ['Month'] },
+  installments:  { name: 'App_Installments',  headers: ['ID', 'Name', 'Total', 'Months', 'StartMonth', 'Monthly', 'Category', 'Account', 'DayOfMonth', 'Note'], text: ['StartMonth'] },
 };
 
 /** ค่าเริ่มต้นที่ใส่ให้ตอน setup (ใส่เฉพาะเมื่อแท็บยังว่าง) */
@@ -54,6 +61,16 @@ const DEFAULTS = {
     { Key: 'USD_THB_FALLBACK', Value: 33, Description: 'อัตรา USD→THB สำรอง เมื่อดึงอัตโนมัติไม่ได้' },
     { Key: 'DRIVE_FOLDER_ID', Value: '', Description: 'โฟลเดอร์ Drive เก็บไฟล์แนบ (สร้างอัตโนมัติ)' },
     { Key: 'IMPORT_DONE', Value: '', Description: 'วันที่นำเข้าข้อมูลเก่า (ระบบใช้ กันนำเข้าซ้ำ)' },
+    { Key: 'BASE_SALARY', Value: '', Description: 'เงินเดือนปัจจุบันสำหรับคาดการณ์ (เว้นว่าง = ใช้รายการเงินเดือนล่าสุด)' },
+    { Key: 'SALARY_GROWTH_PCT', Value: 3, Description: 'เงินเดือนขึ้นต่อปี (%)' },
+    { Key: 'SALARY_RAISE_MONTH', Value: 5, Description: 'เดือนที่เงินเดือนขึ้น (1-12)' },
+    { Key: 'BONUS_MONTHS', Value: 2.5, Description: 'โบนัสกี่เท่าของเงินเดือน (0 = ไม่มี)' },
+    { Key: 'BONUS_MONTH', Value: 4, Description: 'เดือนที่ได้โบนัส (1-12)' },
+    { Key: 'INFLATION_PCT', Value: 3, Description: 'เงินเฟ้อ: รายจ่ายเพิ่มต่อปี (%) สำหรับคาดการณ์ระยะยาว' },
+    { Key: 'RETURN_PCT', Value: 4, Description: 'ผลตอบแทนเงินออม/ลงทุนต่อปี (%) สำหรับคาดการณ์ระยะยาว' },
+    { Key: 'BIRTH_YEAR', Value: 1998, Description: 'ปีเกิด (ค.ศ.)' },
+    { Key: 'RETIRE_AGE', Value: 60, Description: 'อายุที่จะเกษียณ' },
+    { Key: 'PLAN_IMPORT_DONE', Value: '', Description: 'วันที่นำเข้าแผนจาก Expen Life (ระบบใช้)' },
   ],
   categories: [
     [INCOME, 'เงินเดือน', ''], [INCOME, 'โบนัส', ''], [INCOME, 'รายได้เสริม', ''],
