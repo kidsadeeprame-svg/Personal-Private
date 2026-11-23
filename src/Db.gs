@@ -10,24 +10,42 @@
  *    แนะนำวิธีนี้ถ้าอัปเดตโค้ดอัตโนมัติด้วย clasp เพราะโค้ดใหม่จะไม่ทับค่า
  * 3) ชีตที่สคริปต์ผูกอยู่ (สร้างจาก ส่วนขยาย → Apps Script)
  */
+/* แคชภายในการเรียก 1 ครั้ง (ล้างเองเมื่อจบการทำงาน) — ลดการอ่านชีตซ้ำซึ่งเป็นส่วนที่ช้าที่สุด */
+const MEMO_ = { ss: null, sheets: {}, tables: {} };
+
 function ss_() {
+  if (MEMO_.ss) return MEMO_.ss;
   const id = SPREADSHEET_ID || PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
-  if (id) return SpreadsheetApp.openById(id);
+  if (id) return (MEMO_.ss = SpreadsheetApp.openById(id));
   const active = SpreadsheetApp.getActive();
   if (!active) throw new Error('ไม่รู้ว่าต้องใช้ชีตไหน: ตั้ง Script property ชื่อ SPREADSHEET_ID (Project Settings → Script properties)');
-  return active;
+  return (MEMO_.ss = active);
 }
 
 function sheet_(key) {
+  if (MEMO_.sheets[key]) return MEMO_.sheets[key];
   const def = SHEETS[key];
   if (!def) throw new Error('ไม่รู้จักตาราง ' + key);
   const sh = ss_().getSheetByName(def.name);
   if (!sh) throw new Error('ไม่พบแท็บ "' + def.name + '" กรุณารัน setup ก่อน');
-  return sh;
+  return (MEMO_.sheets[key] = sh);
 }
 
-/** อ่านทั้งตารางเป็น array ของ object (มี _row = เลขแถวในชีต) */
+/** ล้างแคชของตาราง (เรียกหลังเขียนข้อมูล) — ไม่ส่ง key = ล้างทั้งหมด */
+function invalidate_(key) {
+  if (key) delete MEMO_.tables[key];
+  else { MEMO_.tables = {}; MEMO_.sheets = {}; }
+}
+
+/** อ่านทั้งตารางเป็น array ของ object (มี _row = เลขแถวในชีต) — ห้ามแก้ object ที่ได้มาโดยตรง */
 function readTable_(key) {
+  if (MEMO_.tables[key]) return MEMO_.tables[key];
+  const out = readTableRaw_(key);
+  MEMO_.tables[key] = out;
+  return out;
+}
+
+function readTableRaw_(key) {
   const sh = sheet_(key);
   const headers = SHEETS[key].headers;
   const last = sh.getLastRow();
@@ -52,6 +70,7 @@ function appendRows_(key, objs) {
   const sh = sheet_(key);
   const rows = objs.map(o => rowOf_(key, o));
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  invalidate_(key);
 }
 
 /** แก้ไขแถวที่ idField = id (merge กับข้อมูลเดิม) */
@@ -61,6 +80,7 @@ function updateById_(key, idField, id, patch) {
   const merged = Object.assign({}, found, patch);
   const row = rowOf_(key, merged);
   sheet_(key).getRange(found._row, 1, 1, row.length).setValues([row]);
+  invalidate_(key);
   return merged;
 }
 
@@ -68,7 +88,14 @@ function updateById_(key, idField, id, patch) {
 function deleteWhere_(key, pred) {
   const sh = sheet_(key);
   const rows = readTable_(key).filter(pred).map(r => r._row).sort((a, b) => b - a);
-  rows.forEach(r => sh.deleteRow(r));
+  // ลบเป็นช่วงแถวติดกันทีเดียว (เร็วกว่าลบทีละแถว)
+  for (let i = 0; i < rows.length;) {
+    let j = i;
+    while (j + 1 < rows.length && rows[j + 1] === rows[j] - 1) j++;
+    sh.deleteRows(rows[j], j - i + 1);
+    i = j + 1;
+  }
+  if (rows.length) invalidate_(key);
   return rows.length;
 }
 
@@ -82,6 +109,7 @@ function replaceTable_(key, objs) {
     const rows = objs.map(o => rowOf_(key, o));
     sh.getRange(2, 1, rows.length, n).setValues(rows);
   }
+  invalidate_(key);
 }
 
 function withLock_(fn) {

@@ -18,7 +18,9 @@ function onOpen() {
 /** สร้างแท็บที่ขาด + ใส่ค่าเริ่มต้นในแท็บที่ยังว่าง (รันซ้ำได้ ไม่ทับข้อมูลเดิม) */
 function setup() {
   const created = ensureSheets_();
+  invalidate_();
   const seeded = seedDefaults_();
+  PropertiesService.getScriptProperties().deleteProperty('READY_SCHEMA');
   const msg = 'ติดตั้งเสร็จ\n' +
     (created.length ? 'สร้างแท็บใหม่: ' + created.join(', ') + '\n' : 'แท็บครบอยู่แล้ว\n') +
     (seeded.length ? 'ใส่ค่าเริ่มต้นใน: ' + seeded.join(', ') : '');
@@ -125,6 +127,21 @@ function getConfig_() {
 
 /** สร้างแท็บ/ค่าตั้งค่าที่ขาดอัตโนมัติ (หลังอัปเดตโค้ดไม่ต้องรัน setup เอง) */
 function ensureReady_() {
+  const props = PropertiesService.getScriptProperties();
+  const readyKey = 'READY_' + SHEETS_SIGNATURE_();
+  if (props.getProperty('READY_SCHEMA') === readyKey) return;
+  ensureReadyFull_();
+  props.setProperty('READY_SCHEMA', readyKey);
+}
+
+/** ลายเซ็นโครงสร้างแท็บ + คีย์ตั้งค่า: เปลี่ยนเมื่อโค้ดเพิ่มแท็บ/คอลัมน์/คีย์ใหม่ */
+function SHEETS_SIGNATURE_() {
+  const txt = SCHEMA_VERSION + '|' + Object.keys(SHEETS).map(k => SHEETS[k].name + ':' + SHEETS[k].headers.join(',')).join(';') +
+    '|' + DEFAULTS.config.map(c => c.Key).join(',');
+  return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, txt)).slice(0, 12);
+}
+
+function ensureReadyFull_() {
   const ss = ss_();
   const missing = Object.keys(SHEETS).some(k => !ss.getSheetByName(SHEETS[k].name));
   if (missing) ensureSheets_();

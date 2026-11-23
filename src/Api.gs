@@ -24,6 +24,7 @@ function guard_() {
 
 const API_ = {
   bootstrap: apiBootstrap_,
+  init: apiInit_,
   dashboard: apiDashboard_,
   transactions: apiTransactions_,
   saveTransaction: apiSaveTransaction_,
@@ -107,6 +108,11 @@ function apiBootstrap_() {
     codeVersion: (PropertiesService.getScriptProperties().getProperty('CODE_SHA') || '').slice(0, 7),
     goals: [GOAL_EMERGENCY, GOAL_RETIREMENT, GOAL_OTHER],
   };
+}
+
+/** โหลดครั้งแรก: ข้อมูลพื้นฐาน + หน้าภาพรวม ในการเรียกครั้งเดียว */
+function apiInit_(month) {
+  return { boot: apiBootstrap_(), dashboard: apiDashboard_(month) };
 }
 
 function usdRate_() {

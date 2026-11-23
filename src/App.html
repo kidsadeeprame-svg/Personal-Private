@@ -25,11 +25,16 @@ function monthLabel(m) { if (!m) return ''; return TH_MONTHS[+m.slice(5, 7) - 1]
 function dateLabel(d) { if (!d) return ''; return +d.slice(8, 10) + ' ' + TH_MONTHS[+d.slice(5, 7) - 1] + ' ' + (+d.slice(0, 4) + 543 - 2500); }
 const today = () => S.boot.today;
 const thisMonth = () => S.boot.today.slice(0, 7);
+const thisMonthLocal = () => { const d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); };
 const thisYear = () => +S.boot.today.slice(0, 4);
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
-function api(name) {
-  const args = Array.prototype.slice.call(arguments, 1);
+/* แคชผลการอ่านไว้ในเบราว์เซอร์: สลับหน้ากลับมาแสดงทันที · ล้างทั้งหมดเมื่อมีการบันทึก/แก้ไข · หมดอายุ 5 นาที */
+const READ_APIS = ['dashboard', 'transactions', 'yearSummary', 'recurring', 'invest', 'loans', 'tax', 'health', 'getTable',
+  'plan', 'planVsActual', 'projection', 'installments'];
+const API_CACHE = {};
+const CACHE_MS = 5 * 60 * 1000;
+function apiRaw(name, args) {
   return new Promise((resolve, reject) => {
     google.script.run
       .withSuccessHandler(r => resolve(r ? JSON.parse(r) : r))
@@ -37,6 +42,18 @@ function api(name) {
       .api(name, JSON.stringify(args));
   });
 }
+function api(name) {
+  const args = Array.prototype.slice.call(arguments, 1);
+  if (READ_APIS.indexOf(name) >= 0) {
+    const key = name + JSON.stringify(args);
+    const hit = API_CACHE[key];
+    if (hit && Date.now() - hit.t < CACHE_MS) return Promise.resolve(JSON.parse(hit.v));
+    return apiRaw(name, args).then(r => { API_CACHE[key] = { t: Date.now(), v: JSON.stringify(r) }; return r; });
+  }
+  if (['bootstrap', 'updateInfo', 'upload'].indexOf(name) < 0) clearApiCache(); // คำสั่งเขียนข้อมูล
+  return apiRaw(name, args);
+}
+function clearApiCache() { Object.keys(API_CACHE).forEach(k => delete API_CACHE[k]); }
 
 let toastTimer;
 function toast(msg, isErr) {
@@ -194,6 +211,7 @@ function go(page) {
 }
 function stale(token) { return token !== S.token; }
 function refresh() { go(S.page); }
+function hardRefresh() { clearApiCache(); go(S.page); }
 $$('#nav a').forEach(a => a.addEventListener('click', () => go(a.dataset.page)));
 
 function head(title, toolbar) {
@@ -667,6 +685,7 @@ function snapshotModal(d) {
 PAGES.loans = async token => {
   const list = await api('loans');
   if (stale(token)) return;
+  S.loanNames = list.map(x => x.Borrower);
   const open = list.filter(l => l.status !== 'ปิดยอด');
   const y = String(thisYear());
   const interestYear = list.reduce((s, l) => s + l.payments.filter(p => p.Date.slice(0, 4) === y).reduce((a, p) => a + p.Interest, 0), 0);
@@ -1419,10 +1438,12 @@ async function instHtml() {
 /* ---------- เริ่มต้น ---------- */
 (async function init() {
   try {
-    S.boot = await api('bootstrap');
+    const month = thisMonthLocal();
+    const first = await apiRaw('init', [month]);
+    S.boot = first.boot;
+    API_CACHE['dashboard' + JSON.stringify([month])] = { t: Date.now(), v: JSON.stringify(first.dashboard) };
     $('#ver').textContent = 'เวอร์ชัน ' + (S.boot.codeVersion || '-');
     go('dashboard');
-    api('loans').then(l => { S.loanNames = l.map(x => x.Borrower); }).catch(() => {});
   } catch (e) {
     $('#main').innerHTML = '<div class="panel"><h2>เริ่มต้นไม่สำเร็จ</h2><p class="error">' + esc(errMsg(e)) + '</p>' +
       '<p>ถ้ายังไม่ได้ติดตั้ง ให้เปิด Google Sheet → เมนู <b>💰 แอปการเงิน → 1) ติดตั้ง</b> แล้วโหลดหน้านี้ใหม่</p></div>';

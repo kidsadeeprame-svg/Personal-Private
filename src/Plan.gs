@@ -319,12 +319,14 @@ function apiSavePlanItem_(i) {
       const col = SHEETS.plan.headers.indexOf('Item') + 1;
       readTable_('plan').filter(r => r.Type === old.Type && String(r.Category) === String(old.Category) && String(r.Item || '') === String(old.Name))
         .forEach(r => sh.getRange(r._row, col).setValue(name));
+      invalidate_('plan');
       // รายการจริงและรายการประจำที่เลือกรายการย่อยนี้ไว้ เปลี่ยนชื่อตาม
       ['tx', 'recurring'].forEach(key => {
         const tsh = sheet_(key);
         const tcol = SHEETS[key].headers.indexOf('Item') + 1;
         readTable_(key).filter(r => r.Type === old.Type && String(r.Category) === String(old.Category) && String(r.Item || '') === String(old.Name))
           .forEach(r => tsh.getRange(r._row, tcol).setValue(name));
+        invalidate_(key);
       });
     }
     return updateById_('planItems', 'ID', i.ID, row);
