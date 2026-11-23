@@ -11,7 +11,7 @@ const SPREADSHEET_ID = '';
 const TZ = 'Asia/Bangkok';
 
 // เพิ่มเลขนี้เมื่อเปลี่ยนโครงสร้างแท็บ เพื่อให้หัวคอลัมน์ถูกอัปเดตอัตโนมัติ
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const INCOME = 'รายรับ';
 const EXPENSE = 'รายจ่าย';
@@ -20,6 +20,13 @@ const INTEREST_CATEGORY = 'ดอกเบี้ยรับ (เงินให
 const GOAL_EMERGENCY = 'ฉุกเฉิน';
 const GOAL_RETIREMENT = 'เกษียณ';
 const GOAL_OTHER = 'อื่นๆ';
+
+// ประเภทกองเงินออม/ลงทุน
+const KIND_CASH = 'เงินฝาก/เงินสด';
+const KIND_FUND = 'กองทุนรวม';       // จำนวนหน่วย × NAV
+const KIND_USD = 'เงิน USD';
+const KIND_OTHER = 'ประกัน/อื่นๆ';
+const FUND_KINDS = [KIND_CASH, KIND_FUND, KIND_USD, KIND_OTHER];
 
 const LOAN_OPEN = 'ค้างชำระ';
 const LOAN_OVERDUE = 'เกินกำหนด';
@@ -40,8 +47,8 @@ const SHEETS = {
   accounts:      { name: 'App_Accounts',      headers: ['Name', 'Active'] },
   tx:            { name: 'App_Transactions',  headers: ['ID', 'Date', 'Type', 'Category', 'Amount', 'Account', 'Note', 'ReceiptUrl', 'Source', 'CreatedAt', 'Item'] },
   recurring:     { name: 'App_Recurring',     headers: ['ID', 'Name', 'Type', 'Category', 'Amount', 'Account', 'DayOfMonth', 'Active', 'LastPostedMonth', 'Item'], text: ['LastPostedMonth'] },
-  funds:         { name: 'App_Funds',         headers: ['Name', 'Currency', 'Goal', 'Active'] },
-  contributions: { name: 'App_Contributions', headers: ['ID', 'BatchID', 'Date', 'Fund', 'Currency', 'AmountFX', 'Rate', 'AmountTHB', 'Account', 'Note', 'Source'] },
+  funds:         { name: 'App_Funds',         headers: ['Name', 'Currency', 'Goal', 'Active', 'Kind', 'NAV', 'NavDate'] },
+  contributions: { name: 'App_Contributions', headers: ['ID', 'BatchID', 'Date', 'Fund', 'Currency', 'AmountFX', 'Rate', 'AmountTHB', 'Account', 'Note', 'Source', 'Units'] },
   snapshots:     { name: 'App_FundSnapshots', headers: ['ID', 'Month', 'Fund', 'Currency', 'ValueFX', 'Rate', 'ValueTHB'], text: ['Month'] },
   loans:         { name: 'App_Loans',         headers: ['LoanID', 'Borrower', 'Date', 'Principal', 'SourceAccount', 'InterestType', 'InterestRate', 'InterestNote', 'DueDate', 'PayAccountNo', 'Bank', 'Note', 'Closed'], text: ['PayAccountNo'] },
   loanPayments:  { name: 'App_LoanPayments',  headers: ['ID', 'LoanID', 'Date', 'Total', 'Interest', 'Principal', 'Note'] },

@@ -39,6 +39,7 @@ const API_ = {
   deleteContributionBatch: apiDeleteContributionBatch_,
   saveSnapshots: apiSaveSnapshots_,
   deleteSnapshot: apiDeleteSnapshot_,
+  resetInvest: apiResetInvest_,
   loans: apiLoans_,
   saveLoan: apiSaveLoan_,
   deleteLoan: apiDeleteLoan_,
@@ -70,7 +71,7 @@ const API_ = {
 };
 
 const WRITE_APIS_ = ['saveTransaction', 'deleteTransaction', 'saveRecurring', 'deleteRecurring', 'postRecurring',
-  'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'saveLoan', 'deleteLoan',
+  'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'resetInvest', 'saveLoan', 'deleteLoan',
   'savePayment', 'deletePayment', 'saveTax', 'saveVisit', 'deleteVisit', 'saveTable',
   'savePlanCell', 'resetPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments',
   'savePlanItem', 'deletePlanItem'];
@@ -102,7 +103,8 @@ function apiBootstrap_() {
     config: getConfig_(),
     categories: readTable_('categories').map(c => ({ Type: c.Type, Name: String(c.Name), MonthlyBudget: optNum_(c.MonthlyBudget), Active: isActive_(c.Active) })),
     accounts: readTable_('accounts').map(a => ({ Name: String(a.Name), Active: isActive_(a.Active) })),
-    funds: readTable_('funds').map(f => ({ Name: String(f.Name), Currency: f.Currency || 'THB', Goal: f.Goal, Active: isActive_(f.Active) })),
+    funds: readTable_('funds').map(f => ({ Name: String(f.Name), Currency: f.Currency || 'THB', Goal: f.Goal, Active: isActive_(f.Active), Kind: fundKind_(f), NAV: num_(f.NAV) })),
+    fundKinds: FUND_KINDS,
     healthItems: healthItems_(),
     planItems: planItems_().map(i => ({ Type: i.Type, Category: i.Category, Name: i.Name })),
     usdRate: usdRate_(),
@@ -280,15 +282,33 @@ function apiPostRecurring_(ids, month, amounts) {
 
 /* ============ เงินออม / ลงทุน ============ */
 
+function fundKind_(f) {
+  if (f.Kind && FUND_KINDS.indexOf(String(f.Kind)) >= 0) return String(f.Kind);
+  return (f.Currency || 'THB') === 'USD' ? KIND_USD : KIND_CASH;
+}
+
 function fundsValuation_() {
   const rate = usdRate_();
   const funds = readTable_('funds');
   const contrib = readTable_('contributions');
   const snaps = readTable_('snapshots');
   return funds.map(f => {
-    const name = String(f.Name), cur = f.Currency || 'THB';
+    const name = String(f.Name), kind = fundKind_(f);
+    const cur = kind === KIND_USD ? 'USD' : 'THB';
     const cs = contrib.filter(c => String(c.Fund) === name);
     const cost = cs.reduce((s, c) => s + num_(c.AmountTHB), 0);
+    if (kind === KIND_FUND) {
+      // กองทุนรวม: มูลค่า = จำนวนหน่วยรวม × NAV ล่าสุด
+      const units = cs.reduce((s, c) => s + num_(c.Units), 0);
+      const nav = num_(f.NAV);
+      const value = nav > 0 ? units * nav : cost;
+      return {
+        Name: name, Currency: 'THB', Goal: f.Goal, Active: isActive_(f.Active), Kind: kind,
+        units: Math.round(units * 10000) / 10000, nav: nav, navDate: fmtDate_(f.NavDate),
+        cost: round2_(cost), valueFX: round2_(value), valueTHB: round2_(value),
+        gain: round2_(value - cost), lastSnapshot: fmtDate_(f.NavDate).slice(0, 7),
+      };
+    }
     const fs = snaps.filter(s => String(s.Fund) === name).sort((a, b) => monthStr_(a.Month).localeCompare(monthStr_(b.Month)));
     const snap = fs[fs.length - 1];
     let valueFX;
@@ -300,7 +320,7 @@ function fundsValuation_() {
     }
     const valueTHB = cur === 'USD' ? valueFX * rate : valueFX;
     return {
-      Name: name, Currency: cur, Goal: f.Goal, Active: isActive_(f.Active),
+      Name: name, Currency: cur, Goal: f.Goal, Active: isActive_(f.Active), Kind: kind,
       cost: round2_(cost), valueFX: round2_(valueFX), valueTHB: round2_(valueTHB),
       gain: round2_(valueTHB - cost), lastSnapshot: snap ? monthStr_(snap.Month) : '',
     };
@@ -316,8 +336,9 @@ function apiInvest_() {
     contributions: readTable_('contributions').map(c => ({
       ID: String(c.ID), BatchID: String(c.BatchID), Date: fmtDate_(c.Date), Fund: String(c.Fund), Currency: c.Currency,
       AmountFX: num_(c.AmountFX), Rate: num_(c.Rate), AmountTHB: num_(c.AmountTHB), Account: String(c.Account || ''),
-      Note: String(c.Note || ''), Source: String(c.Source || ''),
+      Note: String(c.Note || ''), Source: String(c.Source || ''), Units: num_(c.Units),
     })).sort((a, b) => b.Date.localeCompare(a.Date)),
+    kinds: FUND_KINDS,
     snapshots: readTable_('snapshots').map(s => ({
       ID: String(s.ID), Month: monthStr_(s.Month), Fund: String(s.Fund), Currency: s.Currency,
       ValueFX: num_(s.ValueFX), Rate: num_(s.Rate), ValueTHB: num_(s.ValueTHB),
@@ -325,7 +346,7 @@ function apiInvest_() {
   };
 }
 
-/** ลงเงิน 1 ครั้ง แบ่งได้หลายกอง: {date, account, note, lines:[{fund, amountTHB, rate}]} */
+/** ลงเงิน 1 ครั้ง แบ่งได้หลายกอง: {date, account, note, lines:[{fund, amountTHB, rate, nav}]} */
 function apiSaveContribution_(b) {
   const funds = {};
   readTable_('funds').forEach(f => { funds[String(f.Name)] = f; });
@@ -334,20 +355,30 @@ function apiSaveContribution_(b) {
   const batch = b.BatchID || newId_('B');
   if (b.BatchID) deleteWhere_('contributions', r => String(r.BatchID) === String(b.BatchID));
   const date = toDate_(b.date);
+  const navUpdates = [];
   const rows = lines.map(l => {
     const f = funds[l.fund];
     if (!f) throw new Error('ไม่พบกอง ' + l.fund);
-    const cur = f.Currency || 'THB';
+    const kind = fundKind_(f);
+    const cur = kind === KIND_USD ? 'USD' : 'THB';
     const thb = num_(l.amountTHB);
     const rate = cur === 'USD' ? num_(l.rate) : 1;
     if (cur === 'USD' && !rate) throw new Error('กรุณาใส่อัตราแลกเปลี่ยนของ ' + l.fund);
+    let units = '';
+    if (kind === KIND_FUND) {
+      const nav = num_(l.nav) || num_(f.NAV);
+      if (!nav) throw new Error('กรุณาใส่ NAV ที่ซื้อของ ' + l.fund);
+      units = Math.round(thb / nav * 10000) / 10000;
+      if (!f.NavDate || fmtDate_(date) >= fmtDate_(f.NavDate)) navUpdates.push({ name: l.fund, nav: nav });
+    }
     return {
       ID: newId_('C'), BatchID: batch, Date: date, Fund: l.fund, Currency: cur,
       AmountFX: cur === 'USD' ? round2_(thb / rate) : thb, Rate: rate, AmountTHB: thb,
-      Account: b.account || '', Note: b.note || '', Source: 'manual',
+      Account: b.account || '', Note: b.note || '', Source: 'manual', Units: units,
     };
   });
   appendRows_('contributions', rows);
+  navUpdates.forEach(u => updateById_('funds', 'Name', u.name, { NAV: u.nav, NavDate: date }));
   return rows.length;
 }
 
@@ -355,23 +386,104 @@ function apiDeleteContributionBatch_(batchId) {
   return deleteWhere_('contributions', r => String(r.BatchID) === String(batchId));
 }
 
-/** บันทึกยอดสิ้นเดือน: {month, items:[{fund, valueFX, rate}]} แทนที่ของเดือนเดียวกัน */
+/** บันทึกยอดสิ้นเดือน: {month, items:[{fund, valueFX, rate} | {fund, nav}]} แทนที่ของเดือนเดียวกัน */
 function apiSaveSnapshots_(b) {
   const month = monthStr_(b.month);
   if (!month) throw new Error('กรุณาเลือกเดือน');
   const funds = {};
   readTable_('funds').forEach(f => { funds[String(f.Name)] = f; });
-  const items = (b.items || []).filter(i => i.fund && i.valueFX !== '' && i.valueFX !== null && i.valueFX !== undefined);
+  const has = v => v !== '' && v !== null && v !== undefined;
+  const items = (b.items || []).filter(i => i.fund && (has(i.valueFX) || has(i.nav)));
   const names = items.map(i => i.fund);
   deleteWhere_('snapshots', r => monthStr_(r.Month) === month && names.indexOf(String(r.Fund)) >= 0);
+  const val = {};
+  fundsValuation_().forEach(v => { val[v.Name] = v; });
+  const today = new Date();
   const rows = items.map(i => {
-    const cur = (funds[i.fund] && funds[i.fund].Currency) || 'THB';
+    const f = funds[i.fund] || {};
+    const kind = fundKind_(f);
+    if (kind === KIND_FUND && has(i.nav)) {
+      // กองทุนรวม: อัปเดต NAV แล้วเก็บมูลค่า (หน่วย × NAV) ไว้เป็นประวัติ
+      const nav = num_(i.nav);
+      updateById_('funds', 'Name', i.fund, { NAV: nav, NavDate: today });
+      const value = round2_((val[i.fund] ? val[i.fund].units : 0) * nav);
+      return { ID: newId_('S'), Month: month, Fund: i.fund, Currency: 'THB', ValueFX: value, Rate: 1, ValueTHB: value };
+    }
+    const cur = kind === KIND_USD ? 'USD' : 'THB';
     const rate = cur === 'USD' ? (num_(i.rate) || usdRate_()) : 1;
     const fx = num_(i.valueFX);
     return { ID: newId_('S'), Month: month, Fund: i.fund, Currency: cur, ValueFX: fx, Rate: rate, ValueTHB: round2_(fx * rate) };
   });
   appendRows_('snapshots', rows);
   return rows.length;
+}
+
+/**
+ * เริ่มหน้าลงทุนใหม่: สำรองข้อมูลเดิม → ล้าง → สร้างกองและยอดตั้งต้น
+ * rows: [{Name, Kind, Goal, Units, NAV, Value, Cost}]
+ *   กองทุนรวม: Units + NAV (มูลค่า = Units × NAV) · เงิน USD: Value = ยอด USD · อื่นๆ: Value = บาท
+ *   Cost = ต้นทุนเป็นบาท (ว่าง = เท่ากับมูลค่าปัจจุบัน)
+ */
+function apiResetInvest_(rows) {
+  rows = (rows || []).filter(r => String(r.Name || '').trim());
+  if (!rows.length) throw new Error('กรุณาใส่อย่างน้อย 1 รายการ');
+  const names = {};
+  rows.forEach(r => {
+    const n = String(r.Name).trim();
+    if (names[n]) throw new Error('ชื่อซ้ำ: ' + n);
+    names[n] = true;
+    if (FUND_KINDS.indexOf(r.Kind) < 0) throw new Error('ประเภทไม่ถูกต้อง: ' + n);
+    if (r.Kind === KIND_FUND && (!num_(r.NAV) || num_(r.Units) < 0)) throw new Error('กองทุนรวม "' + n + '" ต้องมีจำนวนหน่วยและ NAV');
+  });
+
+  // 1) สำรองแท็บเดิมไว้ในชีต
+  const stamp = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmm');
+  const ss = ss_();
+  ['funds', 'contributions', 'snapshots'].forEach(k => {
+    const copy = sheet_(k).copyTo(ss);
+    copy.setName(SHEETS[k].name.replace('App_', 'Backup_') + '_' + stamp);
+  });
+
+  // 2) ล้างแล้วสร้างใหม่
+  const rate = usdRate_();
+  const today = new Date();
+  const month = monthStr_(today);
+  const batch = 'B-opening-' + stamp;
+  const funds = [], contrib = [], snaps = [];
+  rows.forEach(r => {
+    const name = String(r.Name).trim(), kind = r.Kind;
+    const goal = r.Goal || GOAL_OTHER;
+    const cur = kind === KIND_USD ? 'USD' : 'THB';
+    const fund = { Name: name, Currency: cur, Goal: goal, Active: true, Kind: kind, NAV: '', NavDate: '' };
+    let valueFX, valueTHB, units = '';
+    if (kind === KIND_FUND) {
+      units = num_(r.Units);
+      fund.NAV = num_(r.NAV);
+      fund.NavDate = today;
+      valueFX = valueTHB = round2_(units * fund.NAV);
+    } else if (kind === KIND_USD) {
+      valueFX = num_(r.Value);
+      valueTHB = round2_(valueFX * rate);
+    } else {
+      valueFX = valueTHB = num_(r.Value);
+    }
+    const cost = r.Cost === '' || r.Cost === null || r.Cost === undefined ? valueTHB : num_(r.Cost);
+    funds.push(fund);
+    if (cost || valueFX || units) {
+      contrib.push({
+        ID: newId_('C'), BatchID: batch, Date: today, Fund: name, Currency: cur,
+        AmountFX: kind === KIND_USD ? valueFX : cost, Rate: kind === KIND_USD && valueFX ? round2_(cost / valueFX) : 1,
+        AmountTHB: cost, Account: '', Note: 'ยอดตั้งต้น', Source: 'opening', Units: units,
+      });
+    }
+    if (kind !== KIND_FUND) {
+      snaps.push({ ID: newId_('S'), Month: month, Fund: name, Currency: cur, ValueFX: valueFX, Rate: kind === KIND_USD ? rate : 1, ValueTHB: valueTHB });
+    }
+  });
+  replaceTable_('funds', funds);
+  replaceTable_('contributions', contrib);
+  replaceTable_('snapshots', snaps);
+  return { funds: funds.length, backup: 'Backup_*_' + stamp };
 }
 
 function apiDeleteSnapshot_(id) {
@@ -566,11 +678,17 @@ function apiSaveTable_(key, rows) {
   if (EDITABLE_TABLES_.indexOf(key) < 0) throw new Error('แก้ไขตารางนี้ไม่ได้');
   const headers = SHEETS[key].headers;
   const required = headers[key === 'taxBrackets' ? 2 : (key === 'config' ? 0 : (key === 'categories' ? 1 : 0))];
+  // คอลัมน์ที่หน้าตั้งค่าไม่ได้ส่งมา (เช่น NAV ของกอง) ให้คงค่าเดิมไว้
+  const idOf = r => (key === 'categories' ? r.Type + '|' + r.Name : String(r[headers[0]]));
+  const old = {};
+  if (key !== 'taxBrackets') readTable_(key).forEach(r => { old[idOf(r)] = r; });
   let clean = (rows || []).filter(r => String(r[required] === undefined ? '' : r[required]).trim() !== '').map(r => {
     const o = {};
+    const prev = old[idOf(r)] || {};
     headers.forEach(h => {
-      let v = r[h] === undefined || r[h] === null ? '' : r[h];
-      if (typeof v === 'string') {
+      let v = r[h] === undefined ? prev[h] : r[h];
+      v = v === undefined || v === null ? '' : v;
+      if (typeof v === 'string' && r[h] !== undefined) {
         v = v.trim();
         if (v.charAt(0) === '=') v = "'" + v; // กันสูตรจากหน้าเว็บ
       }

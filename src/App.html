@@ -172,6 +172,7 @@ function openModal(o) {
   $('#modal-submit').textContent = o.submitText || 'บันทึก';
   $('#modal-submit').classList.toggle('hidden', o.noSubmit === true);
   $('.modal-box').classList.toggle('wide', !!o.wide);
+  $('.modal-box').style.width = o.width || '';
   $('#modal').classList.remove('hidden');
   M.onSubmit = o.onSubmit;
   if (o.onOpen) o.onOpen($('#modal-body'));
@@ -571,12 +572,15 @@ PAGES.invest = async token => {
   const totalValue = d.funds.reduce((s, f) => s + f.valueTHB, 0);
   const goals = Object.keys(d.targets).map(g => ({ goal: g, target: d.targets[g], value: d.funds.filter(f => f.Goal === g).reduce((s, f) => s + f.valueTHB, 0) }));
 
-  let html = head('เงินออม / ลงทุน', '<span class="muted small">USD/THB ' + fmt(d.usdRate, 2) + '</span><button class="btn" id="inv-snap">บันทึกยอดสิ้นเดือน</button><button class="btn primary" id="inv-add">+ ลงเงิน</button>');
+  S.investFunds = d.funds;
+  let html = head('เงินออม / ลงทุน', '<span class="muted small">USD/THB ' + fmt(d.usdRate, 2) + '</span><button class="btn ghost" id="inv-reset">เริ่มต้นใหม่</button><button class="btn" id="inv-snap">อัปเดตยอด / NAV</button><button class="btn primary" id="inv-add">+ ลงเงิน</button>');
   html += '<div class="grid cards">' + cardHtml('มูลค่ารวม', money(totalValue), 'saving') + cardHtml('เงินต้นที่ลงไป', money(totalCost)) +
     cardHtml('กำไร/ขาดทุน', (totalValue - totalCost >= 0 ? '+' : '') + money(totalValue - totalCost), totalValue - totalCost >= 0 ? 'income' : 'expense', totalCost ? fmt((totalValue - totalCost) / totalCost * 100, 2) + '%' : '') + '</div>';
 
   html += '<div class="grid three" style="margin-bottom:16px"><div class="panel"><h2>แต่ละกอง</h2><table class="data"><thead><tr><th>กอง</th><th>เป้าหมาย</th><th class="num">เงินต้น</th><th class="num">มูลค่าปัจจุบัน</th><th class="num">กำไร/ขาดทุน</th><th>ยอดล่าสุด</th></tr></thead><tbody>' +
-    d.funds.map(f => '<tr' + (f.Active ? '' : ' class="muted"') + '><td>' + esc(f.Name) + ' <span class="badge">' + esc(f.Currency) + '</span></td><td>' + esc(f.Goal) + '</td><td class="num">' + money(f.cost) +
+    d.funds.map(f => '<tr' + (f.Active ? '' : ' class="muted"') + '><td>' + esc(f.Name) + ' <span class="badge">' + esc(f.Kind || f.Currency) + '</span>' +
+      (f.Kind === 'กองทุนรวม' ? '<div class="small muted">' + fmt(f.units, 4) + ' หน่วย × NAV ' + fmt(f.nav, 4) + (f.navDate ? ' (' + dateLabel(f.navDate) + ')' : '') + '</div>' : '') +
+      '</td><td>' + esc(f.Goal) + '</td><td class="num">' + money(f.cost) +
       '</td><td class="num">' + money(f.valueTHB) + (f.Currency === 'USD' ? '<div class="small muted">$' + fmt(f.valueFX, 2) + '</div>' : '') + '</td><td class="num ' + (f.gain >= 0 ? 'income' : 'expense') + '">' + (f.gain >= 0 ? '+' : '') + fmt(f.gain) +
       (f.cost ? '<div class="small">' + fmt(f.gain / f.cost * 100, 2) + '%</div>' : '') + '</td><td class="small muted">' + (f.lastSnapshot ? monthLabel(f.lastSnapshot) : 'ยังไม่บันทึก') + '</td></tr>').join('') +
     '</tbody></table><p class="muted small">มูลค่าปัจจุบัน = ยอดที่บันทึกล่าสุด + เงินที่ลงเพิ่มหลังจากนั้น (กอง USD คิดด้วยอัตราแลกเปลี่ยนปัจจุบัน)</p></div>' +
@@ -595,6 +599,7 @@ PAGES.invest = async token => {
   $('#main').innerHTML = html;
 
   $('#inv-add').addEventListener('click', () => contributionModal(null));
+  $('#inv-reset').addEventListener('click', () => resetInvestModal(d));
   $('#inv-snap').addEventListener('click', () => snapshotModal(d));
   $$('[data-bedit]').forEach(b => b.addEventListener('click', () => contributionModal(batches[b.dataset.bedit])));
   $$('[data-bdel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบการลงเงินครั้งนี้ทั้งหมด?', async () => {
@@ -619,21 +624,26 @@ PAGES.invest = async token => {
   });
 };
 
+const KIND_FUND_UI = 'กองทุนรวม';
 function contributionModal(batch) {
   const first = batch ? batch[0] : null;
+  const valFunds = S.investFunds || [];
   const funds = activeFunds();
   const byFund = {};
   (batch || []).forEach(c => { byFund[c.Fund] = c; });
   // แสดงทุกกองที่ใช้งาน + กองในรายการเดิม (ถ้าถูกปิดไปแล้ว)
   const names = funds.map(f => f.Name).concat(Object.keys(byFund).filter(n => !funds.some(f => f.Name === n)));
-  const fundOf = n => S.boot.funds.find(f => f.Name === n) || { Name: n, Currency: 'THB' };
+  const fundOf = n => valFunds.find(f => f.Name === n) || S.boot.funds.find(f => f.Name === n) || { Name: n, Currency: 'THB' };
   const rows = names.map(n => {
     const f = fundOf(n), c = byFund[n];
-    const usd = f.Currency === 'USD';
-    return '<tr data-fund="' + esc(n) + '" data-cur="' + f.Currency + '"><td>' + esc(n) + ' <span class="badge">' + f.Currency + '</span></td>' +
+    const usd = f.Currency === 'USD', isFund = f.Kind === KIND_FUND_UI;
+    const nav = c && c.Units ? Math.round(c.AmountTHB / c.Units * 10000) / 10000 : (f.nav || f.NAV || '');
+    return '<tr data-fund="' + esc(n) + '" data-kind="' + esc(f.Kind || '') + '"><td>' + esc(n) + ' <span class="badge">' + esc(f.Kind || f.Currency) + '</span></td>' +
       '<td><input type="number" step="0.01" class="l-thb" value="' + (c ? c.AmountTHB : '') + '" placeholder="0" style="text-align:right"></td>' +
-      '<td>' + (usd ? '<input type="number" step="0.0001" class="l-rate" value="' + (c ? c.Rate : (S.usdRate || S.boot.usdRate)) + '" style="text-align:right">' : '<span class="muted">-</span>') + '</td>' +
-      '<td class="num l-fx muted">' + (usd ? '' : '') + '</td></tr>';
+      '<td>' + (usd ? '<input type="number" step="0.0001" class="l-rate" value="' + (c ? c.Rate : (S.usdRate || S.boot.usdRate)) + '" style="text-align:right" title="อัตราแลกเปลี่ยน">'
+        : isFund ? '<input type="number" step="0.0001" class="l-nav" value="' + nav + '" placeholder="NAV" style="text-align:right" title="NAV ที่ซื้อ">'
+        : '<span class="muted">-</span>') + '</td>' +
+      '<td class="num l-fx muted"></td></tr>';
   }).join('');
   openModal({
     title: batch ? 'แก้ไขการลงเงิน' : 'ลงเงินออม/ลงทุน',
@@ -642,17 +652,20 @@ function contributionModal(batch) {
       field('วันที่', '<input type="date" name="date" value="' + (first ? first.Date : today()) + '">') +
       field('จ่ายจากบัญชี', '<select name="account">' + opts(accounts(first && first.Account), first ? first.Account : '', true) + '</select>') +
       field('หมายเหตุ', '<input name="note" value="' + esc(first ? first.Note : '') + '">', 'full') + '</div>' +
-      '<table class="data lines-table"><thead><tr><th>กอง</th><th>จำนวนเงิน (บาท)</th><th>อัตราแลกเปลี่ยน</th><th class="num">ได้เป็น USD</th></tr></thead><tbody>' + rows +
+      '<table class="data lines-table"><thead><tr><th>กอง</th><th>จำนวนเงิน (บาท)</th><th>อัตราแลกเปลี่ยน / NAV ที่ซื้อ</th><th class="num">ได้</th></tr></thead><tbody>' + rows +
       '</tbody><tfoot><tr><td>รวม</td><td class="num" id="l-total">฿0</td><td></td><td></td></tr></tfoot></table>' +
-      '<p class="muted small">ใส่เฉพาะกองที่ลงเงินครั้งนี้ ช่องที่ว่างไว้จะไม่ถูกบันทึก</p>',
+      '<p class="muted small">ใส่เฉพาะกองที่ลงเงินครั้งนี้ ช่องที่ว่างไว้จะไม่ถูกบันทึก · กองทุนรวมใส่ NAV ที่ซื้อ ระบบคำนวณจำนวนหน่วยให้</p>',
     onOpen: root => {
       const recalc = () => {
         let total = 0;
         $$('tr[data-fund]', root).forEach(tr => {
           const thb = num($('.l-thb', tr).value);
           total += thb;
-          const rate = $('.l-rate', tr);
-          if (rate) $('.l-fx', tr).textContent = thb && num(rate.value) ? '$' + fmt(thb / num(rate.value), 2) : '';
+          const rate = $('.l-rate', tr), nav = $('.l-nav', tr);
+          let out = '';
+          if (rate && thb && num(rate.value)) out = '$' + fmt(thb / num(rate.value), 2);
+          if (nav && thb && num(nav.value)) out = fmt(thb / num(nav.value), 4) + ' หน่วย';
+          $('.l-fx', tr).textContent = out;
         });
         $('#l-total', root).textContent = money(total);
       };
@@ -662,9 +675,13 @@ function contributionModal(batch) {
     onSubmit: async form => {
       const f = readForm(form);
       const lines = $$('tr[data-fund]', form).map(tr => ({
-        fund: tr.dataset.fund, amountTHB: num($('.l-thb', tr).value), rate: $('.l-rate', tr) ? num($('.l-rate', tr).value) : 1,
+        fund: tr.dataset.fund, amountTHB: num($('.l-thb', tr).value),
+        rate: $('.l-rate', tr) ? num($('.l-rate', tr).value) : 1,
+        nav: $('.l-nav', tr) ? num($('.l-nav', tr).value) : '',
       })).filter(l => l.amountTHB);
       if (!lines.length) throw new Error('กรุณาใส่จำนวนเงินอย่างน้อย 1 กอง');
+      const noNav = lines.find(l => l.nav === 0);
+      if (noNav) throw new Error('กรุณาใส่ NAV ที่ซื้อของ ' + noNav.fund);
       await api('saveContribution', { BatchID: first ? first.BatchID : '', date: f.date, account: f.account, note: f.note, lines });
       toast('บันทึกแล้ว'); refresh();
     },
@@ -675,28 +692,104 @@ function snapshotModal(d) {
   const month = thisMonth();
   const funds = d.funds.filter(f => f.Active);
   openModal({
-    title: 'บันทึกยอดสิ้นเดือน',
+    title: 'อัปเดตยอด / NAV',
+    wide: true,
     body: '<div class="form-grid" style="margin-bottom:12px">' + field('เดือน', '<input type="month" name="month" value="' + month + '">') + '</div>' +
-      '<table class="data lines-table"><thead><tr><th>กอง</th><th>ยอดปัจจุบัน (สกุลของกอง)</th><th>อัตราแลกเปลี่ยน</th><th class="num">เป็นบาท</th></tr></thead><tbody>' +
-      funds.map(f => '<tr data-fund="' + esc(f.Name) + '"><td>' + esc(f.Name) + ' <span class="badge">' + f.Currency + '</span></td>' +
-        '<td><input type="number" step="0.01" class="s-val" value="' + f.valueFX + '" style="text-align:right"></td>' +
-        '<td>' + (f.Currency === 'USD' ? '<input type="number" step="0.0001" class="s-rate" value="' + d.usdRate + '" style="text-align:right">' : '<span class="muted">-</span>') + '</td>' +
-        '<td class="num s-thb"></td></tr>').join('') +
-      '</tbody></table><p class="muted small">ใส่ยอดตามที่เห็นในแอปธนาคาร/แอปลงทุน (ค่าที่เติมไว้ให้คือมูลค่าที่ระบบคำนวณ) ถ้าบันทึกเดือนเดิมซ้ำจะแทนที่ของเดิม</p>',
+      '<table class="data lines-table"><thead><tr><th>กอง</th><th>ยอดปัจจุบัน / NAV ล่าสุด</th><th>อัตราแลกเปลี่ยน</th><th class="num">มูลค่า (บาท)</th></tr></thead><tbody>' +
+      funds.map(f => {
+        const isFund = f.Kind === KIND_FUND_UI;
+        return '<tr data-fund="' + esc(f.Name) + '" data-units="' + (f.units || 0) + '"><td>' + esc(f.Name) + ' <span class="badge">' + esc(f.Kind || f.Currency) + '</span>' +
+          (isFund ? '<div class="small muted">' + fmt(f.units, 4) + ' หน่วย</div>' : '') + '</td>' +
+          '<td>' + (isFund ? '<input type="number" step="0.0001" class="s-nav" value="' + (f.nav || '') + '" placeholder="NAV" style="text-align:right">'
+            : '<input type="number" step="0.01" class="s-val" value="' + f.valueFX + '" style="text-align:right">') + '</td>' +
+          '<td>' + (f.Currency === 'USD' ? '<input type="number" step="0.0001" class="s-rate" value="' + d.usdRate + '" style="text-align:right">' : '<span class="muted">-</span>') + '</td>' +
+          '<td class="num s-thb"></td></tr>';
+      }).join('') +
+      '</tbody></table><p class="muted small">กองทุนรวม: ใส่ NAV ล่าสุดจากแอปลงทุน ระบบคำนวณมูลค่า = หน่วย × NAV · อื่นๆ: ใส่ยอดตามที่เห็นในแอปธนาคาร · บันทึกเดือนเดิมซ้ำจะแทนที่ของเดิม</p>',
     onOpen: root => {
       const recalc = () => $$('tr[data-fund]', root).forEach(tr => {
-        const r = $('.s-rate', tr);
-        $('.s-thb', tr).textContent = money(num($('.s-val', tr).value) * (r ? num(r.value) : 1));
+        const nav = $('.s-nav', tr), r = $('.s-rate', tr);
+        const v = nav ? num(tr.dataset.units) * num(nav.value) : num($('.s-val', tr).value) * (r ? num(r.value) : 1);
+        $('.s-thb', tr).textContent = money(v);
       });
       root.addEventListener('input', recalc); recalc();
     },
     onSubmit: async form => {
       const f = readForm(form);
-      const items = $$('tr[data-fund]', form).filter(tr => $('.s-val', tr).value !== '').map(tr => ({
-        fund: tr.dataset.fund, valueFX: num($('.s-val', tr).value), rate: $('.s-rate', tr) ? num($('.s-rate', tr).value) : 1,
-      }));
+      const items = $$('tr[data-fund]', form).map(tr => {
+        const nav = $('.s-nav', tr);
+        if (nav) return nav.value === '' ? null : { fund: tr.dataset.fund, nav: num(nav.value) };
+        const v = $('.s-val', tr);
+        return v.value === '' ? null : { fund: tr.dataset.fund, valueFX: num(v.value), rate: $('.s-rate', tr) ? num($('.s-rate', tr).value) : 1 };
+      }).filter(Boolean);
       await api('saveSnapshots', { month: f.month, items });
-      toast('บันทึกยอดแล้ว'); refresh();
+      toast('อัปเดตแล้ว'); refresh();
+    },
+  });
+}
+
+/** เริ่มหน้าลงทุนใหม่ด้วยยอดเงินที่มีอยู่ตอนนี้ */
+function resetInvestModal(d) {
+  const kinds = d.kinds || S.boot.fundKinds;
+  const goals = S.boot.goals;
+  const rowHtml = r => '<tr class="ri-row">' +
+    '<td><input class="ri-name" value="' + esc(r.Name || '') + '" placeholder="เช่น Dime เงินสด / K-USA"></td>' +
+    '<td><select class="ri-kind" style="min-width:140px">' + opts(kinds, r.Kind || kinds[0]) + '</select></td>' +
+    '<td><select class="ri-goal" style="min-width:96px">' + opts(goals, r.Goal || goals[0]) + '</select></td>' +
+    '<td><input type="number" step="0.0001" class="ri-units" value="' + (r.Units || '') + '" placeholder="หน่วย"></td>' +
+    '<td><input type="number" step="0.0001" class="ri-nav" value="' + (r.NAV || '') + '" placeholder="NAV"></td>' +
+    '<td><input type="number" step="0.01" class="ri-value" value="' + (r.Value || '') + '" placeholder="0"></td>' +
+    '<td><input type="number" step="0.01" class="ri-cost" value="' + (r.Cost || '') + '" placeholder="= มูลค่า"></td>' +
+    '<td class="num ri-thb muted"></td>' +
+    '<td><button type="button" class="icon-btn ri-del" title="ลบแถว">✕</button></td></tr>';
+  const start = d.funds.filter(f => f.Active).map(f => ({ Name: f.Name, Kind: f.Kind, Goal: f.Goal }));
+  openModal({
+    title: 'เริ่มต้นหน้าลงทุนใหม่',
+    wide: true,
+    width: 'min(1200px, 100%)',
+    submitText: 'ล้างข้อมูลเดิมและเริ่มใหม่',
+    body: '<p class="muted small" style="margin-top:0">ใส่เงินออม/ลงทุนที่มีอยู่ตอนนี้ทุกรายการ ระบบจะ<b>ลบประวัติการลงเงินและยอดเดิมทั้งหมด</b> แล้วใช้ตารางนี้เป็นยอดตั้งต้น ' +
+      '(ข้อมูลเดิมสำรองไว้ในแท็บ Backup_… ของชีต)</p>' +
+      '<div class="table-wrap" style="max-height:none"><table class="data lines-table"><thead><tr><th style="min-width:130px">ชื่อ</th><th>ประเภท</th><th>เป้าหมาย</th>' +
+      '<th>จำนวนหน่วย<div class="small muted">กองทุนรวม</div></th><th>NAV ล่าสุด<div class="small muted">กองทุนรวม</div></th>' +
+      '<th>มูลค่าปัจจุบัน<div class="small muted">บาท / USD</div></th><th>ต้นทุน (บาท)<div class="small muted">ไม่บังคับ</div></th><th class="num">มูลค่า (บาท)</th><th></th></tr></thead>' +
+      '<tbody id="ri-body">' + (start.length ? start : [{}]).map(rowHtml).join('') + '</tbody>' +
+      '<tfoot><tr><td colspan="7"><button type="button" class="btn sm" id="ri-add">+ เพิ่มรายการ</button></td><td class="num" id="ri-total"></td><td></td></tr></tfoot></table></div>' +
+      '<ul class="muted small"><li><b>เงินฝาก/เงินสด, ประกัน/อื่นๆ</b>: ใส่มูลค่าปัจจุบันเป็นบาท</li>' +
+      '<li><b>กองทุนรวม</b>: ใส่จำนวนหน่วยและ NAV ล่าสุด (ดูในแอปลงทุน) ระบบคำนวณมูลค่าให้</li>' +
+      '<li><b>เงิน USD</b>: ใส่ยอดเป็นดอลลาร์ ระบบแปลงเป็นบาทด้วยเรทปัจจุบัน (' + fmt(d.usdRate, 2) + ')</li>' +
+      '<li><b>ต้นทุน</b>: เงินที่ลงไปจริง (ดูได้ในแอปลงทุน) เพื่อคำนวณกำไร/ขาดทุน · เว้นว่าง = เท่ากับมูลค่าปัจจุบัน</li></ul>' +
+      '<label><input type="checkbox" name="confirm"> ยืนยันลบประวัติการลงเงินและยอดเดิมทั้งหมด</label>',
+    onOpen: root => {
+      const recalc = () => {
+        let total = 0;
+        $$('.ri-row', root).forEach(tr => {
+          const kind = $('.ri-kind', tr).value;
+          const isFund = kind === KIND_FUND_UI, isUsd = kind === 'เงิน USD';
+          $('.ri-units', tr).disabled = !isFund; $('.ri-nav', tr).disabled = !isFund; $('.ri-value', tr).disabled = isFund;
+          const v = isFund ? num($('.ri-units', tr).value) * num($('.ri-nav', tr).value) : num($('.ri-value', tr).value) * (isUsd ? d.usdRate : 1);
+          total += v;
+          $('.ri-thb', tr).textContent = v ? money(v) : '';
+        });
+        $('#ri-total', root).textContent = money(total);
+      };
+      root.addEventListener('input', recalc);
+      root.addEventListener('change', recalc);
+      $('#ri-add', root).addEventListener('click', () => { $('#ri-body', root).insertAdjacentHTML('beforeend', rowHtml({})); recalc(); });
+      root.addEventListener('click', e => { if (e.target.closest('.ri-del')) { e.target.closest('tr').remove(); recalc(); } });
+      recalc();
+    },
+    onSubmit: async form => {
+      if (!readForm(form).confirm) throw new Error('กรุณาติ๊กยืนยันก่อน');
+      const rows = $$('.ri-row', form).map(tr => ({
+        Name: $('.ri-name', tr).value.trim(), Kind: $('.ri-kind', tr).value, Goal: $('.ri-goal', tr).value,
+        Units: $('.ri-units', tr).value === '' ? '' : num($('.ri-units', tr).value), NAV: $('.ri-nav', tr).value === '' ? '' : num($('.ri-nav', tr).value),
+        Value: $('.ri-value', tr).value === '' ? '' : num($('.ri-value', tr).value), Cost: $('.ri-cost', tr).value === '' ? '' : num($('.ri-cost', tr).value),
+      })).filter(r => r.Name);
+      if (!rows.length) throw new Error('กรุณาใส่อย่างน้อย 1 รายการ');
+      const r = await api('resetInvest', rows);
+      S.boot = await api('bootstrap');
+      toast('เริ่มใหม่แล้ว ' + r.funds + ' กอง (สำรองข้อมูลเดิมไว้ในแท็บ ' + r.backup + ')'); refresh();
     },
   });
 }
@@ -1021,7 +1114,7 @@ const SETTINGS = [
     cols: [{ k: 'Type', l: 'ประเภท', t: 'select', o: () => [INCOME, EXPENSE] }, { k: 'Name', l: 'ชื่อหมวด' }, { k: 'MonthlyBudget', l: 'งบ/เดือน', t: 'number' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
   { key: 'accounts', title: 'บัญชี / ช่องทางจ่าย', cols: [{ k: 'Name', l: 'ชื่อบัญชี' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
   { key: 'funds', title: 'กองเงินออม / ลงทุน', note: 'เป้าหมาย: ใช้รวมยอดเทียบเป้าฉุกเฉิน/เกษียณ · เปลี่ยนชื่อกองจะทำให้ประวัติเดิมไม่ผูกกับกองนี้',
-    cols: [{ k: 'Name', l: 'ชื่อกอง' }, { k: 'Currency', l: 'สกุลเงิน', t: 'select', o: () => ['THB', 'USD'] }, { k: 'Goal', l: 'เป้าหมาย', t: 'select', o: () => S.boot.goals }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
+    cols: [{ k: 'Name', l: 'ชื่อกอง' }, { k: 'Kind', l: 'ประเภท', t: 'select', o: () => S.boot.fundKinds }, { k: 'Currency', l: 'สกุลเงิน', t: 'select', o: () => ['THB', 'USD'] }, { k: 'Goal', l: 'เป้าหมาย', t: 'select', o: () => S.boot.goals }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
   { key: 'healthItems', title: 'รายการตรวจสุขภาพ และเกณฑ์ปกติ', note: 'เว้นว่างค่าต่ำสุด/สูงสุดได้ถ้าไม่มีเกณฑ์ด้านนั้น · ลำดับ ใช้เรียงในตาราง',
     cols: [{ k: 'Name', l: 'ชื่อรายการ' }, { k: 'Unit', l: 'หน่วย' }, { k: 'Min', l: 'ต่ำสุดปกติ', t: 'number' }, { k: 'Max', l: 'สูงสุดปกติ', t: 'number' }, { k: 'Group', l: 'กลุ่ม' }, { k: 'Order', l: 'ลำดับ', t: 'number' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
   { key: 'config', title: 'เป้าหมายและค่าตั้งค่า', cols: [{ k: 'Key', l: 'คีย์', t: 'ro' }, { k: 'Value', l: 'ค่า' }, { k: 'Description', l: 'คำอธิบาย', t: 'ro' }], fixed: true },
