@@ -60,22 +60,38 @@ const accounts = include => S.boot.accounts.filter(a => a.Active || a.Name === i
 const activeFunds = () => S.boot.funds.filter(f => f.Active);
 const itemsOf = (type, cat) => (S.boot.planItems || []).filter(i => i.Type === type && i.Category === cat).map(i => i.Name);
 /** ช่องเลือกรายการย่อย (แสดงเมื่อหมวดมีรายการย่อยในแผน) */
+/** ชื่อรายการย่อยที่แนะนำ: จากแผน + ที่เคยบันทึกไว้ในหมวดนั้น */
+function itemSuggestions(type, cat) {
+  const set = new Set(itemsOf(type, cat));
+  Object.keys(S.txCache || {}).forEach(y => (S.txCache[y] || []).forEach(t => {
+    if (t.Type === type && t.Category === cat && t.Item) set.add(t.Item);
+  }));
+  return Array.from(set);
+}
+/** ช่องรายการย่อย (ไม่บังคับ): แสดงเมื่อเลือกหมวดแล้ว พิมพ์ชื่อใหม่หรือเลือกจากรายการแนะนำ */
 function itemFieldHtml(type, cat, selected) {
-  const list = itemsOf(type, cat);
-  if (selected && list.indexOf(selected) < 0) list.push(selected);
-  return '<label class="field item-field' + (list.length ? '' : ' hidden') + '"><span>รายการย่อย</span><select name="Item">' +
-    '<option value="">— ไม่ระบุ —</option>' + opts(list, selected) + '</select></label>';
+  const list = cat ? itemSuggestions(type, cat) : [];
+  return '<label class="field item-field' + (cat ? '' : ' hidden') + '"><span>รายการย่อย (ไม่บังคับ)</span>' +
+    '<input name="Item" list="item-list" autocomplete="off" value="' + esc(selected || '') + '" placeholder="เช่น โทรศัพท์พ่อ">' +
+    '<datalist id="item-list">' + list.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
+    '<span class="small muted item-hint">' + itemHint(type, cat) + '</span></label>';
+}
+function itemHint(type, cat) {
+  if (!cat) return '';
+  return itemsOf(type, cat).length
+    ? 'เลือกจากรายการในแผน หรือพิมพ์ชื่อใหม่'
+    : 'พิมพ์ชื่อได้เลย · ถ้าอยากตั้งยอดแผนของรายการย่อย ไปที่ แผน/คาดการณ์ → ▸ ' + esc(cat);
 }
 function bindItemField(root) {
   const sync = () => {
     const f = readForm(root);
-    const list = itemsOf(f.Type, f.Category);
     const box = $('.item-field', root);
-    $('select[name=Item]', box).innerHTML = '<option value="">— ไม่ระบุ —</option>' + opts(list, f.Item);
-    box.classList.toggle('hidden', !list.length);
+    box.classList.toggle('hidden', !f.Category);
+    $('#item-list', box).innerHTML = (f.Category ? itemSuggestions(f.Type, f.Category) : []).map(n => '<option value="' + esc(n) + '">').join('');
+    $('.item-hint', box).innerHTML = itemHint(f.Type, f.Category);
   };
-  $('select[name=Category]', root).addEventListener('change', sync);
-  $$('input[name=Type]', root).forEach(r => r.addEventListener('change', sync));
+  $('select[name=Category]', root).addEventListener('change', () => { $('input[name=Item]', root).value = ''; sync(); });
+  $$('input[name=Type]', root).forEach(r => r.addEventListener('change', () => { $('input[name=Item]', root).value = ''; sync(); }));
 }
 const catLabel = t => esc(t.Category) + (t.Item ? ' <span class="muted">› ' + esc(t.Item) + '</span>' : '');
 
@@ -340,7 +356,7 @@ function txModal(t, after) {
       let url = f.removeReceipt ? '' : t.ReceiptUrl;
       const uploaded = await uploadIfAny($('input[name=file]', form), 'receipt');
       if (uploaded) url = uploaded;
-      await api('saveTransaction', { ID: t.ID, Date: f.Date, Type: f.Type, Category: f.Category, Amount: num(f.Amount), Account: f.Account, Note: f.Note, ReceiptUrl: url, Item: f.Item || '' });
+      await api('saveTransaction', { ID: t.ID, Date: f.Date, Type: f.Type, Category: f.Category, Amount: num(f.Amount), Account: f.Account, Note: f.Note, ReceiptUrl: url, Item: (f.Item || '').trim() });
       delete S.txCache[f.Date.slice(0, 4)];
       if (t.Date) delete S.txCache[t.Date.slice(0, 4)];
       toast('บันทึกแล้ว');
