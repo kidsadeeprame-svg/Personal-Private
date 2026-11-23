@@ -172,6 +172,9 @@ function buildPlan_(months) {
   };
   Object.keys(ov).forEach(k => { const p = k.split('|'); if (months.indexOf(p[0]) >= 0) addCat(p[1], p[2]); });
   items.forEach(i => addCat(i.Type, i.Category));
+  // ดอกเบี้ยรับจากเงินให้ยืม จัดการแยก (คำนวณจากระบบเงินให้ยืม)
+  const ii = incomeCats.indexOf(INTEREST_CATEGORY);
+  if (ii >= 0) incomeCats.splice(ii, 1);
   const budget = {};
   cats.filter(c => c.Type === EXPENSE).forEach(c => { budget[String(c.Name)] = num_(c.MonthlyBudget); });
   const recSum = (type, cat) => rec.filter(r => r.Type === type && String(r.Category) === cat).reduce((a, r) => a + num_(r.Amount), 0);
@@ -217,6 +220,20 @@ function buildPlan_(months) {
     }),
   }));
 
+  // ดอกเบี้ยรับ (เงินให้ยืม): ค่าตั้งต้น = ดอกที่คาดว่าจะได้จากเงินให้ยืมที่ยังไม่ปิดยอด + แถวย่อยรายผู้ยืม (ดูอย่างเดียว)
+  const li = loanInterestPlan_(months);
+  const interestOwn = months.some(m => ov[m + '|' + INCOME + '|' + INTEREST_CATEGORY + '|']);
+  const interestManualItems = items.some(i => i.Type === INCOME && i.Category === INTEREST_CATEGORY);
+  if (interestManualItems) {
+    catRows(INCOME, INTEREST_CATEGORY, () => 0).forEach(r => incomeRows.push(r));
+  } else if (li.perLoan.length || interestOwn) {
+    incomeRows.push({ type: INCOME, category: INTEREST_CATEGORY, loanInterest: true, cells: months.map((m, j) => cell(m, INCOME, INTEREST_CATEGORY, li.total[j])) });
+    li.perLoan.forEach(l => incomeRows.push({
+      type: INCOME, category: INTEREST_CATEGORY, sub: true, loan: l.id, label: l.label,
+      cells: l.cells.map(v => ({ v: v, def: v, own: false, readonly: true })),
+    }));
+  }
+
   const incomeTotal = j => incomeRows.filter(r => !r.sub).reduce((a, r) => a + r.cells[j].v, 0);
   const savingRows = catRows(PLAN_SAVING_TYPE, PLAN_SAVING, m => incomeTotal(months.indexOf(m)) * s.savingPct / 100);
 
@@ -224,6 +241,32 @@ function buildPlan_(months) {
     months, savingPct: s.savingPct,
     rows: incomeRows.concat(expenseRows, instRows, savingRows),
   };
+}
+
+/**
+ * ดอกเบี้ยที่คาดว่าจะได้ต่อเดือนจากเงินให้ยืมแบบ % ต่อเดือน
+ * - เริ่มเดือนถัดจากเดือนที่ให้ยืม
+ * - คิดจากเงินต้นคงเหลือ ณ ต้นเดือนนั้น (หักเงินต้นที่รับคืนก่อนเดือนนั้น)
+ * - คิดต่อจนกว่าจะปิดยอด (เกินกำหนดชำระก็ยังคิด)
+ */
+function loanInterestPlan_(months) {
+  const perLoan = [];
+  loansComputed_().forEach(l => {
+    if (l.InterestType !== 'percent' || !num_(l.InterestRate)) return;
+    const startM = monthStr_(l.Date) || (l.payments[0] ? monthStr_(l.payments[0].Date) : '');
+    if (!startM) return;
+    const lastPay = l.payments.length ? monthStr_(l.payments[l.payments.length - 1].Date) : startM;
+    const cells = months.map(m => {
+      if (m <= startM) return 0;
+      if (l.Closed && m > lastPay) return 0;
+      const paidBefore = l.payments.filter(p => monthStr_(p.Date) < m).reduce((a, p) => a + p.Principal, 0);
+      const rem = l.Principal - paidBefore;
+      return rem > 0 ? round2_(rem * num_(l.InterestRate) / 100) : 0;
+    });
+    if (cells.some(v => v)) perLoan.push({ id: l.LoanID, label: l.Borrower + ' (' + l.LoanID + ') ' + l.InterestRate + '%', cells });
+  });
+  const total = months.map((m, j) => round2_(perLoan.reduce((a, l) => a + l.cells[j], 0)));
+  return { perLoan, total };
 }
 
 function planTotals_(plan) {

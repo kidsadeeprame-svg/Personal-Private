@@ -1058,7 +1058,16 @@ async function planMonthHtml() {
       out += rowHtml(r, 'pl-cat', '<a class="pl-toggle" data-key="' + esc(key) + '" title="กดเพื่อ' + (open ? 'ซ่อน' : 'ดู/เพิ่ม') + 'รายการย่อย">' + (open ? '▾' : '▸') + ' ' + esc(r.category) +
         (subs.length ? ' <span class="badge">' + subs.length + '</span>' : '') + '</a>');
       if (!open) return;
-      subs.forEach(x => { out += rowHtml(x, 'pl-subrow', '<a class="pl-item" data-id="' + esc(x.itemId) + '" title="แก้ไข/ลบรายการย่อย">↳ ' + esc(x.item) + '</a>'); });
+      subs.forEach(x => {
+        out += x.loan
+          ? rowHtml(x, 'pl-subrow', '<span class="muted">↳ ' + esc(x.label) + '</span>')
+          : rowHtml(x, 'pl-subrow', '<a class="pl-item" data-id="' + esc(x.itemId) + '" title="แก้ไข/ลบรายการย่อย">↳ ' + esc(x.item) + '</a>');
+      });
+      if (r.loanInterest) {
+        out += '<tr class="pl-subrow"><td colspan="' + (p.months.length + 2) + '" class="muted small">คำนวณจากเงินให้ยืมที่ยังไม่ปิดยอด (เงินต้นคงเหลือ × % ต่อเดือน) จนกว่าจะปิดยอด · ' +
+          'ตัวเลขจริงมาจากการกด "รับชำระ" ในหน้าเงินให้ยืม · แก้ยอดรวมของเดือนได้ที่แถวหมวด</td></tr>';
+        return;
+      }
       out += '<tr class="pl-subrow"><td colspan="' + (p.months.length + 2) + '"><a class="pl-additem small" data-type="' + esc(r.type) + '" data-cat="' + esc(r.category) + '">＋ เพิ่มรายการย่อยใน ' + esc(r.category) + '</a>' +
         (!subs.length ? ' <span class="muted small">(เมื่อมีรายการย่อย ยอดของหมวดจะเท่ากับผลรวมรายการย่อย)</span>' : '') + '</td></tr>';
     });
