@@ -974,11 +974,13 @@ const SETTINGS = [
 
 PAGES.settings = async token => {
   let html = head('ตั้งค่า');
+  html += '<div class="panel" id="upd" style="margin-bottom:16px"><h2>อัปเดตโค้ดจาก GitHub</h2><div class="upd-body muted small">กำลังตรวจสอบเวอร์ชัน…</div></div>';
   html += '<div class="grid">' + SETTINGS.map(s => '<div class="panel" id="set-' + s.key + '"><h2>' + s.title + '<span class="spacer"></span>' +
     (s.fixed ? '' : '<button class="btn sm" data-addrow="' + s.key + '">+ เพิ่มแถว</button>') + '<button class="btn sm primary" data-save="' + s.key + '">บันทึก</button></h2>' +
     (s.note ? '<p class="muted small" style="margin-top:-6px">' + s.note + '</p>' : '') + '<div class="grid-body loading">กำลังโหลด…</div></div>').join('') + '</div>' +
     '<p class="muted small">แก้ไขโดยตรงในแท็บ App_… ของ Google Sheet ก็ได้ ข้อมูลจะตรงกัน</p>';
   $('#main').innerHTML = html;
+  renderUpdatePanel(token);
   await Promise.all(SETTINGS.map(async s => {
     const d = await api('getTable', s.key);
     if (stale(token)) return;
@@ -1002,6 +1004,34 @@ PAGES.settings = async token => {
     } catch (e) { toast(errMsg(e), true); } finally { b.disabled = false; }
   }));
 };
+
+async function renderUpdatePanel(token) {
+  const box = $('#upd .upd-body');
+  let d;
+  try { d = await api('updateInfo'); } catch (e) {
+    if (!stale(token)) box.innerHTML = '<span class="error">' + esc(errMsg(e)) + '</span>';
+    return;
+  }
+  if (stale(token)) return;
+  const short = s => (s ? s.slice(0, 7) : '-');
+  box.classList.remove('muted', 'small');
+  box.innerHTML = '<div class="toolbar" style="margin-bottom:8px">' +
+    '<span>โค้ดในโปรเจกต์: <b>' + short(d.currentSha) + '</b>' + (d.updatedAt ? ' <span class="muted small">(อัปเดต ' + esc(d.updatedAt) + ')</span>' : '') + '</span>' +
+    '<span>ล่าสุดบน GitHub: <b>' + short(d.latestSha) + '</b> <span class="muted small">' + esc(d.latestMessage || '') + '</span></span>' +
+    (d.upToDate ? '<span class="badge ok">เป็นเวอร์ชันล่าสุด</span>' : '<span class="badge warn">มีเวอร์ชันใหม่</span>') + '</div>' +
+    '<div class="toolbar"><button class="btn primary sm" id="upd-now"' + (d.upToDate ? ' disabled' : '') + '>อัปเดตโค้ดตอนนี้</button>' +
+    '<label class="small"><input type="checkbox" id="upd-auto"' + (d.autoUpdate ? ' checked' : '') + '> อัปเดตอัตโนมัติทุกวัน (ตี 3)</label></div>' +
+    '<p class="muted small">อัปเดตแล้วต้องกด <b>การทำให้ใช้งานได้ → จัดการ → ✏️ → เวอร์ชันใหม่</b> ในหน้า Apps Script เว็บนี้จึงจะใช้โค้ดใหม่</p>';
+  $('#upd-now').addEventListener('click', async e => {
+    e.target.disabled = true;
+    try { const r = await api('updateCode'); toast(r.updated ? 'อัปเดตโค้ดแล้ว — ไปกด Deploy เวอร์ชันใหม่' : r.message); renderUpdatePanel(token); }
+    catch (err) { toast(errMsg(err), true); e.target.disabled = false; }
+  });
+  $('#upd-auto').addEventListener('change', async e => {
+    try { await api('setAutoUpdate', e.target.checked); toast(e.target.checked ? 'เปิดอัปเดตอัตโนมัติแล้ว' : 'ปิดอัปเดตอัตโนมัติแล้ว'); }
+    catch (err) { toast(errMsg(err), true); e.target.checked = !e.target.checked; }
+  });
+}
 
 function renderGrid(s, rows) {
   const body = $('#set-' + s.key + ' .grid-body');

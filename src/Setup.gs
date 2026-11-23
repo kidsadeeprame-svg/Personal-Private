@@ -10,6 +10,7 @@ function onOpen() {
     .addItem('3) นำเข้าแผนล่วงหน้าจาก Expen Life', 'importPlanMenu')
     .addSeparator()
     .addItem('ลบข้อมูลที่นำเข้า (เพื่อนำเข้าใหม่)', 'removeImportedMenu')
+    .addItem('อัปเดตโค้ดจาก GitHub', 'updateCodeMenu')
     .addItem('เปิดเว็บแอป', 'showWebAppLink')
     .addToUi();
 }
@@ -65,6 +66,10 @@ function seedDefaults_() {
 
 function importLegacyMenu() {
   notify_(importLegacy());
+}
+
+function updateCodeMenu() {
+  notify_(updateFromGitHub(false).message);
 }
 
 function importPlanMenu() {

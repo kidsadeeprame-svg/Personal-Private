@@ -32,6 +32,7 @@
    | `src/Setup.gs` | สคริปต์ | `Setup` |
    | `src/Import.gs` | สคริปต์ | `Import` |
    | `src/Plan.gs` | สคริปต์ | `Plan` |
+   | `src/Updater.gs` | สคริปต์ | `Updater` |
    | `src/Api.gs` | สคริปต์ | `Api` |
    | `src/Index.html` | HTML (＋ → HTML) | `Index` |
    | `src/Styles.html` | HTML | `Styles` |
@@ -68,34 +69,32 @@
 - แท็บใหม่และค่าตั้งค่าใหม่จะถูกสร้างให้อัตโนมัติตอนเปิดเว็บ ไม่ต้องรัน setup ซ้ำ
 - ถ้าเคยใส่ `SPREADSHEET_ID` ใน `Config.gs` ไว้ อย่าลืมใส่กลับหลังวางไฟล์ใหม่ทับ
 
-### อัปเดตโค้ดอัตโนมัติ (GitHub → Apps Script)
+### อัปเดตโค้ดอัตโนมัติจาก GitHub (ไม่ต้องใช้ Node.js)
 
-ตั้งครั้งเดียว แล้วทุกครั้งที่มีโค้ดใหม่เข้า `main` ระบบ GitHub Actions จะส่งโค้ดเข้าโปรเจกต์ Apps Script ให้เอง
-เหลือแค่กด **Deploy → Manage deployments → ✏️ → New version → Deploy** เอง
-(หรือใช้ลิงก์ **Test deployments** ที่ลงท้ายด้วย `/dev` ซึ่งใช้โค้ดล่าสุดเสมอโดยไม่ต้อง Deploy)
+แอปดึงโค้ดล่าสุดจาก GitHub มาอัปเดตตัวเองได้ เหลือแค่กด **Deploy เวอร์ชันใหม่** เอง
 
-1. **ย้าย ID ชีตไปเก็บใน Script property** (ทำก่อน เพราะการส่งโค้ดอัตโนมัติจะทับไฟล์ `Config`)
-   Apps Script → ⚙️ **Project Settings** → **Script properties** → **Add script property**
-   - Property: `SPREADSHEET_ID`
-   - Value: `1qFpVNvG3IjRmF2xbg3JQBtQi4ZFpkOIg2DnT_Pij_yA`
-   (ถ้าโปรเจกต์สร้างจากเมนู ส่วนขยาย → Apps Script ของชีต ข้ามข้อนี้ได้)
-2. **เปิด Apps Script API** ที่ https://script.google.com/home/usersettings → Google Apps Script API → **On**
-3. **คัดลอก Script ID**: Apps Script → ⚙️ Project Settings → IDs → Script ID
-4. **สร้างสิทธิ์ clasp บนคอมของตัวเอง** (ต้องมี [Node.js](https://nodejs.org)) เปิด Terminal / Command Prompt แล้วรัน
-   ```bash
-   npx @google/clasp@2.4.2 login
-   ```
-   เบราว์เซอร์จะเปิดให้ล็อกอินและกดอนุญาต เสร็จแล้วจะได้ไฟล์ `.clasprc.json` ในโฟลเดอร์ผู้ใช้
-   (Windows: `C:\Users\<ชื่อผู้ใช้>\.clasprc.json`, Mac: `~/.clasprc.json`)
-5. **ใส่ secrets ใน GitHub**: repo นี้ → **Settings → Secrets and variables → Actions → New repository secret**
-   - `APPS_SCRIPT_ID` = Script ID จากข้อ 3
-   - `CLASPRC_JSON` = เนื้อหาทั้งไฟล์ `.clasprc.json` จากข้อ 4
-6. ทดสอบ: แท็บ **Actions → Push to Apps Script → Run workflow** ถ้าขึ้น ✅ แปลว่าโค้ดเข้า Apps Script แล้ว
+**ตั้งครั้งเดียว**
+1. เปิด **Google Apps Script API** ที่ https://script.google.com/home/usersettings → Google Apps Script API → **On**
+2. วางไฟล์ `Updater` (＋ → สคริปต์) จาก `src/Updater.gs` และวางทับ `appsscript.json` (เปิดให้เห็นได้ที่ ⚙️ Project Settings → ติ๊ก Show "appsscript.json")
+   — เป็นการวางโค้ดด้วยมือครั้งสุดท้าย
+3. เลือกไฟล์ **Updater.gs** → ฟังก์ชัน **`updateFromGitHub`** → **▷ เรียกใช้** → กดอนุญาตสิทธิ์
+   ระบบจะจำ ID ชีตไว้ใน Script property ให้เอง แล้วดึงโค้ดทุกไฟล์จาก GitHub มาแทน
+4. **การทำให้ใช้งานได้ → จัดการ → ✏️ → เวอร์ชันใหม่ → ทำให้ใช้งานได้**
 
-> ⚠️ `CLASPRC_JSON` คือสิทธิ์แก้สคริปต์และไฟล์ Drive ในบัญชี Google ของเรา เก็บเป็น secret เท่านั้น ห้ามใส่ในไฟล์หรือแชท
-> ใช้กับ repo แบบ private ที่มีแค่เราเท่านั้น ถ้าต้องการยกเลิก: ลบ secret และถอนสิทธิ์ที่ https://myaccount.google.com/permissions
->
-> หมายเหตุ: การส่งโค้ดจะแทนที่ไฟล์ทั้งหมดในโปรเจกต์ Apps Script ด้วยไฟล์ใน `src/` (ไฟล์อื่นที่สร้างเองในโปรเจกต์จะหายไป)
+**ครั้งต่อไป** เมื่อมีโค้ดใหม่: เว็บ → **ตั้งค่า → อัปเดตโค้ดจาก GitHub → อัปเดตโค้ดตอนนี้** (หรือติ๊ก **อัปเดตอัตโนมัติทุกวัน**)
+→ แล้ว Deploy เวอร์ชันใหม่ (ลิงก์ **Test deployments** ที่ลงท้ายด้วย `/dev` ใช้โค้ดล่าสุดทันทีโดยไม่ต้อง Deploy)
+
+> - การอัปเดตจะแทนที่ไฟล์ทั้งหมดในโปรเจกต์ด้วยไฟล์ใน `src/` (ไฟล์อื่นที่สร้างเองในโปรเจกต์จะหายไป) ข้อมูลในชีตไม่ถูกแตะ
+> - ถ้าเปลี่ยน repo เป็น private: ตั้ง Script property `GITHUB_TOKEN` = fine-grained token ที่มีสิทธิ์อ่าน Contents ของ repo นี้
+
+<details><summary>ทางเลือก: ส่งโค้ดด้วย GitHub Actions + clasp (ต้องมี Node.js)</summary>
+
+ทุกครั้งที่มีโค้ดเข้า `main` workflow `.github/workflows/push-apps-script.yml` จะส่งโค้ดเข้า Apps Script ให้เอง
+ต้องตั้ง secrets `APPS_SCRIPT_ID` (Script ID) และ `CLASPRC_JSON` (เนื้อหา `~/.clasprc.json` หลังรัน `npx @google/clasp@2.4.2 login`)
+ถ้าไม่ได้ตั้ง secrets workflow จะข้ามไปเฉยๆ
+`CLASPRC_JSON` คือสิทธิ์แก้สคริปต์/ไฟล์ Drive ของบัญชีเรา เก็บเป็น secret เท่านั้น
+
+</details>
 
 ### อัปเดตเป็นเวอร์ชันที่มี "แผน/คาดการณ์"
 
@@ -177,6 +176,7 @@ src/
   Db.gs         อ่าน/เขียนตารางในชีต + ตัวช่วยแปลงวันที่/ตัวเลข
   Setup.gs      เมนูในชีต, สร้างแท็บ, โฟลเดอร์ไฟล์แนบ, config
   Import.gs     นำเข้าข้อมูลจากแท็บเดิม
+  Updater.gs    อัปเดตโค้ดตัวเองจาก GitHub
   Plan.gs       แผนรายเดือน, แผน vs จริง, คาดการณ์ถึงเกษียณ, แผนผ่อน
   Api.gs        doGet + API ทั้งหมดที่หน้าเว็บเรียก (ผ่าน api(name, argsJson))
   Index.html    โครงหน้าเว็บ

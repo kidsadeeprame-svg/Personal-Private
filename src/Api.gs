@@ -62,6 +62,9 @@ const API_ = {
   deleteInstallment: apiDeleteInstallment_,
   postInstallments: apiPostInstallments_,
   savePlanItem: apiSavePlanItem_,
+  updateInfo: apiUpdateInfo_,
+  updateCode: apiUpdateCode_,
+  setAutoUpdate: apiSetAutoUpdate_,
   deletePlanItem: apiDeletePlanItem_,
 };
 
