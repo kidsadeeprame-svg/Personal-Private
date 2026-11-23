@@ -1,0 +1,145 @@
+/**
+ * ===== ชั้นอ่าน/เขียนข้อมูลในชีต =====
+ * ทุกแท็บของแอปเป็นตาราง: แถว 1 = หัวคอลัมน์, แถว 2 เป็นต้นไป = ข้อมูล 1 แถวต่อ 1 รายการ
+ */
+
+function ss_() {
+  return SPREADSHEET_ID ? SpreadsheetApp.openById(SPREADSHEET_ID) : SpreadsheetApp.getActive();
+}
+
+function sheet_(key) {
+  const def = SHEETS[key];
+  if (!def) throw new Error('ไม่รู้จักตาราง ' + key);
+  const sh = ss_().getSheetByName(def.name);
+  if (!sh) throw new Error('ไม่พบแท็บ "' + def.name + '" กรุณารัน setup ก่อน');
+  return sh;
+}
+
+/** อ่านทั้งตารางเป็น array ของ object (มี _row = เลขแถวในชีต) */
+function readTable_(key) {
+  const sh = sheet_(key);
+  const headers = SHEETS[key].headers;
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const values = sh.getRange(2, 1, last - 1, headers.length).getValues();
+  const out = [];
+  values.forEach((r, i) => {
+    if (!r.some(v => v !== '' && v !== null)) return;
+    const o = { _row: i + 2 };
+    headers.forEach((h, j) => { o[h] = r[j]; });
+    out.push(o);
+  });
+  return out;
+}
+
+function rowOf_(key, obj) {
+  return SHEETS[key].headers.map(h => (obj[h] === undefined || obj[h] === null ? '' : obj[h]));
+}
+
+function appendRows_(key, objs) {
+  if (!objs.length) return;
+  const sh = sheet_(key);
+  const rows = objs.map(o => rowOf_(key, o));
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+}
+
+/** แก้ไขแถวที่ idField = id (merge กับข้อมูลเดิม) */
+function updateById_(key, idField, id, patch) {
+  const found = readTable_(key).find(r => String(r[idField]) === String(id));
+  if (!found) throw new Error('ไม่พบรายการ ' + id);
+  const merged = Object.assign({}, found, patch);
+  const row = rowOf_(key, merged);
+  sheet_(key).getRange(found._row, 1, 1, row.length).setValues([row]);
+  return merged;
+}
+
+/** ลบทุกแถวที่ตรงเงื่อนไข (ลบจากล่างขึ้นบน) คืนจำนวนที่ลบ */
+function deleteWhere_(key, pred) {
+  const sh = sheet_(key);
+  const rows = readTable_(key).filter(pred).map(r => r._row).sort((a, b) => b - a);
+  rows.forEach(r => sh.deleteRow(r));
+  return rows.length;
+}
+
+/** เขียนทับข้อมูลทั้งตาราง (ใช้กับหน้าตั้งค่า) */
+function replaceTable_(key, objs) {
+  const sh = sheet_(key);
+  const n = SHEETS[key].headers.length;
+  const last = sh.getLastRow();
+  if (last >= 2) sh.getRange(2, 1, last - 1, n).clearContent();
+  if (objs.length) {
+    const rows = objs.map(o => rowOf_(key, o));
+    sh.getRange(2, 1, rows.length, n).setValues(rows);
+  }
+}
+
+function withLock_(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+
+/* ---------- ตัวช่วยแปลงค่า ---------- */
+
+function num_(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  if (v === null || v === undefined || v === '' || v === '-') return 0;
+  const n = parseFloat(String(v).replace(/[,฿\s]/g, ''));
+  return isFinite(n) ? n : 0;
+}
+
+/** ช่องว่าง = '' (ใช้กับค่าที่ "ไม่กรอก" ต่างจาก 0) */
+function optNum_(v) {
+  if (v === null || v === undefined || v === '' || v === '-') return '';
+  const n = num_(v);
+  return n;
+}
+
+function isActive_(v) {
+  return !(v === false || String(v).toUpperCase() === 'FALSE' || v === 0 || v === '0');
+}
+
+function newId_(prefix) {
+  return prefix + Utilities.formatDate(new Date(), TZ, 'yyMMdd') + '-' + Utilities.getUuid().replace(/-/g, '').slice(0, 12);
+}
+
+/** Date → 'yyyy-MM-dd' */
+function fmtDate_(d) {
+  if (d instanceof Date && !isNaN(d)) return Utilities.formatDate(d, TZ, 'yyyy-MM-dd');
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0, 10);
+  return '';
+}
+
+/** 'yyyy-MM-dd' → Date (เวลาเที่ยงวัน กันปัญหาโซนเวลา) */
+function toDate_(s) {
+  if (s instanceof Date) return s;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
+  if (!m) throw new Error('รูปแบบวันที่ไม่ถูกต้อง: ' + s);
+  return new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0);
+}
+
+function optDate_(s) {
+  return s ? toDate_(s) : '';
+}
+
+/** ค่าใดๆ → 'yyyy-MM' */
+function monthStr_(v) {
+  if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, TZ, 'yyyy-MM');
+  const s = String(v || '');
+  const m = /^(\d{4})-(\d{2})/.exec(s);
+  return m ? m[1] + '-' + m[2] : '';
+}
+
+function addMonths_(month, delta) {
+  const y = +month.slice(0, 4), m = +month.slice(5, 7) - 1 + delta;
+  const d = new Date(y, m, 1, 12);
+  return Utilities.formatDate(d, TZ, 'yyyy-MM');
+}
+
+function daysInMonth_(month) {
+  return new Date(+month.slice(0, 4), +month.slice(5, 7), 0).getDate();
+}
+
+function round2_(n) {
+  return Math.round(n * 100) / 100;
+}

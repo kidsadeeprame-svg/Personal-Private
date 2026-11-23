@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">💰 <span>การเงินและสุขภาพ</span></div>
+      <nav id="nav">
+        <a data-page="dashboard">📊 <span>ภาพรวม</span></a>
+        <a data-page="transactions">🧾 <span>รายรับ-รายจ่าย</span></a>
+        <a data-page="invest">📈 <span>เงินออม/ลงทุน</span></a>
+        <a data-page="loans">🤝 <span>เงินให้ยืม</span></a>
+        <a data-page="tax">🏛️ <span>ภาษี</span></a>
+        <a data-page="health">🩺 <span>ผลตรวจสุขภาพ</span></a>
+        <a data-page="settings">⚙️ <span>ตั้งค่า</span></a>
+      </nav>
+    </aside>
+    <main id="main"><div class="loading">กำลังโหลด…</div></main>
+  </div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <div class="modal-head"><h3 id="modal-title"></h3><button class="icon-btn" data-close>✕</button></div>
+      <form id="modal-form" novalidate>
+        <div id="modal-body"></div>
+        <div class="modal-foot">
+          <span id="modal-error" class="error"></span>
+          <button type="button" class="btn ghost" data-close>ยกเลิก</button>
+          <button type="submit" class="btn primary" id="modal-submit">บันทึก</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <?!= include('App'); ?>
+</body>
+</html>

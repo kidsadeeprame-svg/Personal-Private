@@ -1,0 +1,1009 @@
+<script>
+/* =========================================================
+ * แอปการเงินและสุขภาพ — ฝั่งหน้าเว็บ
+ * ========================================================= */
+const S = { boot: null, page: 'dashboard', charts: {}, token: 0, txCache: {}, txTab: 'list', txFilter: {} };
+const INCOME = 'รายรับ', EXPENSE = 'รายจ่าย';
+const TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+
+/* ---------- ตัวช่วยทั่วไป ---------- */
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmt(n, d) {
+  const v = Number(n) || 0;
+  return v.toLocaleString('th-TH', { minimumFractionDigits: d || 0, maximumFractionDigits: d === undefined ? 2 : d });
+}
+const money = n => '฿' + fmt(n);
+const num = v => { const n = parseFloat(String(v === undefined || v === null ? '' : v).replace(/,/g, '')); return isFinite(n) ? n : 0; };
+const cleanNote = s => String(s || '').replace(/\s*\[import\]/g, '').trim();
+const isBlank = v => v === '' || v === null || v === undefined;
+const truthy = v => v === true || String(v).toUpperCase() === 'TRUE';
+function monthLabel(m) { if (!m) return ''; return TH_MONTHS[+m.slice(5, 7) - 1] + ' ' + (+m.slice(0, 4) + 543 - 2500); }
+function dateLabel(d) { if (!d) return ''; return +d.slice(8, 10) + ' ' + TH_MONTHS[+d.slice(5, 7) - 1] + ' ' + (+d.slice(0, 4) + 543 - 2500); }
+const today = () => S.boot.today;
+const thisMonth = () => S.boot.today.slice(0, 7);
+const thisYear = () => +S.boot.today.slice(0, 4);
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function api(name) {
+  const args = Array.prototype.slice.call(arguments, 1);
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(r => resolve(r ? JSON.parse(r) : r))
+      .withFailureHandler(e => reject(e))
+      .api(name, JSON.stringify(args));
+  });
+}
+
+let toastTimer;
+function toast(msg, isErr) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isErr ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), isErr ? 6000 : 2500);
+}
+function errMsg(e) { return (e && e.message) ? e.message : String(e); }
+
+function opts(list, selected, withBlank) {
+  return (withBlank ? '<option value="">— เลือก —</option>' : '') +
+    list.map(o => {
+      const v = typeof o === 'object' ? o.value : o, l = typeof o === 'object' ? o.label : o;
+      return '<option value="' + esc(v) + '"' + (String(v) === String(selected) ? ' selected' : '') + '>' + esc(l) + '</option>';
+    }).join('');
+}
+const cats = (type, includeName) => S.boot.categories.filter(c => c.Type === type && (c.Active || c.Name === includeName)).map(c => c.Name);
+const accounts = include => S.boot.accounts.filter(a => a.Active || a.Name === include).map(a => a.Name);
+const activeFunds = () => S.boot.funds.filter(f => f.Active);
+
+function field(label, html, cls) { return '<label class="field ' + (cls || '') + '"><span>' + label + '</span>' + html + '</label>'; }
+
+function readForm(form) {
+  const o = {};
+  $$('[name]', form).forEach(el => {
+    if (el.type === 'checkbox') o[el.name] = el.checked;
+    else if (el.type === 'radio') { if (el.checked) o[el.name] = el.value; }
+    else if (el.type !== 'file') o[el.name] = el.value;
+  });
+  return o;
+}
+
+function readFileB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+async function uploadIfAny(input, kind) {
+  const file = input && input.files && input.files[0];
+  if (!file) return null;
+  if (file.size > 15 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกิน 15MB');
+  const base64 = await readFileB64(file);
+  const res = await api('upload', { name: file.name, mimeType: file.type, base64, kind });
+  return res.url;
+}
+
+/* ---------- Modal ---------- */
+const M = { onSubmit: null };
+function openModal(o) {
+  $('#modal-title').textContent = o.title;
+  // สร้าง #modal-body ใหม่ทุกครั้ง เพื่อล้าง event listener ของ modal ก่อนหน้า
+  const oldBody = $('#modal-body');
+  const body = oldBody.cloneNode(false);
+  oldBody.replaceWith(body);
+  body.innerHTML = o.body;
+  $('#modal-error').textContent = '';
+  $('#modal-submit').textContent = o.submitText || 'บันทึก';
+  $('#modal-submit').classList.toggle('hidden', o.noSubmit === true);
+  $('.modal-box').classList.toggle('wide', !!o.wide);
+  $('#modal').classList.remove('hidden');
+  M.onSubmit = o.onSubmit;
+  if (o.onOpen) o.onOpen($('#modal-body'));
+  const first = $('#modal-body input:not([type=hidden]):not([type=checkbox]), #modal-body select');
+  if (first && !o.noFocus) first.focus();
+}
+function closeModal() { $('#modal').classList.add('hidden'); M.onSubmit = null; }
+document.addEventListener('click', e => { if (e.target.closest('[data-close]')) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').classList.contains('hidden')) closeModal(); });
+$('#modal-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!M.onSubmit) return closeModal();
+  const btn = $('#modal-submit');
+  btn.disabled = true;
+  $('#modal-error').textContent = '';
+  try {
+    const done = await M.onSubmit($('#modal-form'));
+    if (done !== false) closeModal();
+  } catch (err) {
+    $('#modal-error').textContent = errMsg(err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function confirmAction(msg, fn) {
+  if (!confirm(msg)) return;
+  try { await fn(); } catch (e) { toast(errMsg(e), true); }
+}
+
+/* ---------- Charts ---------- */
+function chart(id, config) {
+  if (S.charts[id]) S.charts[id].destroy();
+  const el = document.getElementById(id);
+  if (!el || typeof Chart === 'undefined') return;
+  Chart.defaults.color = cssVar('--muted');
+  Chart.defaults.borderColor = cssVar('--line');
+  Chart.defaults.font.family = "'IBM Plex Sans Thai', system-ui, sans-serif";
+  S.charts[id] = new Chart(el, config);
+}
+const moneyTick = { callback: v => fmt(v, 0) };
+const moneyTooltip = { callbacks: { label: c => (c.dataset.label ? c.dataset.label + ': ' : '') + money(c.parsed.y) } };
+
+/* ---------- Router ---------- */
+const PAGES = {};
+function go(page) {
+  S.page = page;
+  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+  Object.keys(S.charts).forEach(k => { S.charts[k].destroy(); delete S.charts[k]; });
+  const token = ++S.token;
+  $('#main').innerHTML = '<div class="loading">กำลังโหลด…</div>';
+  Promise.resolve(PAGES[page](token)).catch(e => {
+    if (token === S.token) $('#main').innerHTML = '<div class="panel error">เกิดข้อผิดพลาด: ' + esc(errMsg(e)) + '</div>';
+  });
+}
+function stale(token) { return token !== S.token; }
+function refresh() { go(S.page); }
+$$('#nav a').forEach(a => a.addEventListener('click', () => go(a.dataset.page)));
+
+function head(title, toolbar) {
+  return '<div class="page-head"><h1>' + title + '</h1><div class="toolbar">' + (toolbar || '') + '</div></div>';
+}
+
+/* =========================================================
+ * ภาพรวม
+ * ========================================================= */
+PAGES.dashboard = async token => {
+  const month = S.dashMonth || thisMonth();
+  const d = await api('dashboard', month);
+  if (stale(token)) return;
+  const c = d.cards;
+  const rateCls = c.savingRate >= c.savingTarget ? 'income' : 'expense';
+  let html = head('ภาพรวม', '<input type="month" id="dash-month" value="' + month + '"><button class="btn primary" id="dash-add">+ บันทึกรายการ</button>');
+  html += '<div class="grid cards">' +
+    cardHtml('รายรับ', money(c.income), 'income', c.interest ? 'รวมดอกเบี้ยเงินให้ยืม ' + money(c.interest) : '') +
+    cardHtml('รายจ่าย', money(c.expense), 'expense') +
+    cardHtml('เงินออม/ลงทุน', money(c.saving), 'saving') +
+    cardHtml('คงเหลือ', money(c.remaining), c.remaining >= 0 ? 'income' : 'expense') +
+    cardHtml('อัตราการออม', fmt(c.savingRate, 1) + '%', rateCls, 'เป้า ' + c.savingTarget + '% ของรายรับ') +
+    '</div>';
+
+  html += '<div class="grid three" style="margin-bottom:16px">' +
+    '<div class="panel"><h2>แนวโน้ม 12 เดือน</h2><div class="chart-box"><canvas id="ch-trend"></canvas></div></div>' +
+    '<div class="panel"><h2>งบประมาณรายหมวด · ' + monthLabel(month) + '</h2>' + budgetsHtml(d.budgets) + '</div></div>';
+
+  html += '<div class="grid two">' +
+    '<div class="panel"><h2>เป้าหมายการออม<span class="spacer"></span><a class="small" data-go="invest">ดูทั้งหมด →</a></h2>' + goalsHtml(d.goals) + '</div>' +
+    '<div class="panel"><h2>เงินให้ยืมที่ยังค้าง<span class="spacer"></span><span class="badge info">' + money(d.loans.total) + '</span></h2>' + loansMiniHtml(d.loans.list) + '</div>' +
+    '<div class="panel"><h2>รายจ่ายตามหมวด · ' + monthLabel(month) + '</h2>' + expenseCatHtml(d.expenseByCat, c.expense) + '</div>' +
+    '<div class="panel"><h2>รายการประจำที่ยังไม่บันทึกเดือนนี้</h2>' + recurringMiniHtml(d.recurringPending) + '</div>' +
+    '</div>';
+  $('#main').innerHTML = html;
+
+  $('#dash-month').addEventListener('change', e => { S.dashMonth = e.target.value; refresh(); });
+  $('#dash-add').addEventListener('click', () => txModal(null, refresh));
+  $$('[data-go]').forEach(a => a.addEventListener('click', () => go(a.dataset.go)));
+  const postAll = $('#post-recurring');
+  if (postAll) postAll.addEventListener('click', async () => {
+    try {
+      const n = await api('postRecurring', d.recurringPending.map(r => r.ID), thisMonth());
+      toast('บันทึกแล้ว ' + n + ' รายการ'); refresh();
+    } catch (e) { toast(errMsg(e), true); }
+  });
+
+  chart('ch-trend', {
+    type: 'bar',
+    data: {
+      labels: d.trend.map(t => monthLabel(t.month)),
+      datasets: [
+        { label: 'รายรับ', data: d.trend.map(t => t.income), backgroundColor: cssVar('--income') },
+        { label: 'รายจ่าย', data: d.trend.map(t => t.expense), backgroundColor: cssVar('--expense') },
+        { label: 'เงินออม', data: d.trend.map(t => t.saving), backgroundColor: cssVar('--saving') },
+      ],
+    },
+    options: { maintainAspectRatio: false, scales: { y: { ticks: moneyTick } }, plugins: { tooltip: moneyTooltip } },
+  });
+};
+
+function cardHtml(label, value, cls, sub) {
+  return '<div class="card"><div class="label">' + label + '</div><div class="value ' + (cls || '') + '">' + value + '</div>' + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>';
+}
+function barHtml(pct, cls) {
+  return '<div class="bar ' + (cls || '') + '"><div style="width:' + Math.min(100, Math.max(0, pct)).toFixed(1) + '%"></div></div>';
+}
+function budgetsHtml(list) {
+  if (!list.length) return '<div class="empty">ยังไม่ได้ตั้งงบ — ตั้งได้ที่หน้า ตั้งค่า</div>';
+  return list.map(b => {
+    const pct = b.budget ? b.spent / b.budget * 100 : 0;
+    const cls = pct > 100 ? 'bad' : pct >= 80 ? 'warn' : 'ok';
+    const left = b.budget - b.spent;
+    return '<div class="budget-row"><div class="top"><span>' + esc(b.category) + '</span><span class="small ' + (left < 0 ? 'expense' : 'muted') + '">' +
+      money(b.spent) + ' / ' + money(b.budget) + (left < 0 ? ' · เกิน ' + money(-left) : '') + '</span></div>' + barHtml(pct, cls) + '</div>';
+  }).join('');
+}
+function goalsHtml(goals) {
+  return goals.map(g => {
+    const pct = g.target ? g.value / g.target * 100 : 0;
+    return '<div class="budget-row"><div class="top"><span>' + esc(g.goal) + '</span><span class="small muted">' + money(g.value) +
+      (g.target ? ' / ' + money(g.target) + ' · ' + fmt(pct, 1) + '%' : '') + '</span></div>' + (g.target ? barHtml(pct, pct >= 100 ? 'ok' : '') : '') + '</div>';
+  }).join('') || '<div class="empty">ยังไม่มีข้อมูล</div>';
+}
+function loanBadge(status) {
+  const cls = status === 'เกินกำหนด' ? 'bad' : status === 'ปิดยอด' ? 'ok' : 'warn';
+  return '<span class="badge ' + cls + '">' + esc(status) + '</span>';
+}
+function loansMiniHtml(list) {
+  if (!list.length) return '<div class="empty">ไม่มียอดค้าง 🎉</div>';
+  return '<div class="table-wrap" style="max-height:260px"><table class="data"><thead><tr><th>ผู้ยืม</th><th>กำหนดชำระ</th><th class="num">คงเหลือ</th><th></th></tr></thead><tbody>' +
+    list.map(l => '<tr><td>' + esc(l.Borrower) + ' <span class="muted small">' + esc(l.LoanID) + '</span></td><td>' + (dateLabel(l.DueDate) || '<span class="muted">-</span>') +
+      '</td><td class="num">' + money(l.remaining) + '</td><td>' + loanBadge(l.status) + '</td></tr>').join('') + '</tbody></table></div>';
+}
+function expenseCatHtml(list, total) {
+  if (!list.length) return '<div class="empty">ยังไม่มีรายจ่ายเดือนนี้</div>';
+  return list.map(x => '<div class="budget-row"><div class="top"><span>' + esc(x.category) + '</span><span class="small muted">' + money(x.amount) + ' · ' +
+    fmt(total ? x.amount / total * 100 : 0, 1) + '%</span></div>' + barHtml(total ? x.amount / total * 100 : 0) + '</div>').join('');
+}
+function recurringMiniHtml(list) {
+  if (!list.length) return '<div class="empty">บันทึกครบแล้ว ✓</div>';
+  return '<table class="data"><tbody>' + list.map(r => '<tr><td>' + esc(r.Name) + ' <span class="muted small">' + esc(r.Category) + '</span></td><td class="num ' +
+    (r.Type === INCOME ? 'income' : 'expense') + '">' + money(r.Amount) + '</td></tr>').join('') +
+    '</tbody></table><div style="margin-top:10px;text-align:right"><button class="btn primary sm" id="post-recurring">บันทึกทั้งหมดเข้าเดือนนี้</button></div>';
+}
+
+/* =========================================================
+ * รายรับ-รายจ่าย
+ * ========================================================= */
+function txModal(t, after) {
+  const isNew = !t;
+  t = t || { Type: EXPENSE, Date: today(), Amount: '', Category: '', Account: '', Note: '', ReceiptUrl: '' };
+  const catOpts = type => opts(cats(type, t.Category), t.Category, true);
+  openModal({
+    title: isNew ? 'บันทึกรายการ' : 'แก้ไขรายการ',
+    body: '<div class="form-grid">' +
+      '<div class="full"><div class="seg">' +
+      '<label><input type="radio" name="Type" value="' + EXPENSE + '"' + (t.Type === EXPENSE ? ' checked' : '') + '>รายจ่าย</label>' +
+      '<label><input type="radio" name="Type" value="' + INCOME + '"' + (t.Type === INCOME ? ' checked' : '') + '>รายรับ</label></div></div>' +
+      field('วันที่', '<input type="date" name="Date" required value="' + esc(t.Date) + '">') +
+      field('จำนวนเงิน (บาท)', '<input type="number" step="0.01" name="Amount" required value="' + esc(t.Amount) + '" inputmode="decimal">') +
+      field('หมวด', '<select name="Category" required>' + catOpts(t.Type) + '</select>') +
+      field('บัญชี', '<select name="Account">' + opts(accounts(t.Account), t.Account, true) + '</select>') +
+      field('รายละเอียด', '<input name="Note" value="' + esc(t.Note) + '" placeholder="เช่น ค่าข้าวกลางวัน">', 'full') +
+      field('รูปใบเสร็จ (ไม่บังคับ)', '<input type="file" name="file" accept="image/*,application/pdf">' +
+        (t.ReceiptUrl ? '<span class="small">ไฟล์เดิม: <a href="' + esc(t.ReceiptUrl) + '" target="_blank">เปิดดู</a> <label><input type="checkbox" name="removeReceipt"> ลบไฟล์แนบ</label></span>' : ''), 'full') +
+      '</div>',
+    onOpen: root => {
+      $$('input[name=Type]', root).forEach(r => r.addEventListener('change', () => {
+        $('select[name=Category]', root).innerHTML = catOpts(readForm(root).Type);
+      }));
+      $('input[name=Amount]', root).focus();
+    },
+    noFocus: true,
+    onSubmit: async form => {
+      const f = readForm(form);
+      if (!f.Date) throw new Error('กรุณาเลือกวันที่');
+      if (!num(f.Amount)) throw new Error('กรุณากรอกจำนวนเงิน');
+      if (!f.Category) throw new Error('กรุณาเลือกหมวด');
+      let url = f.removeReceipt ? '' : t.ReceiptUrl;
+      const uploaded = await uploadIfAny($('input[name=file]', form), 'receipt');
+      if (uploaded) url = uploaded;
+      await api('saveTransaction', { ID: t.ID, Date: f.Date, Type: f.Type, Category: f.Category, Amount: num(f.Amount), Account: f.Account, Note: f.Note, ReceiptUrl: url });
+      delete S.txCache[f.Date.slice(0, 4)];
+      if (t.Date) delete S.txCache[t.Date.slice(0, 4)];
+      toast('บันทึกแล้ว');
+      if (after) after();
+    },
+  });
+}
+
+function yearOptions(selected, extra) {
+  const ys = new Set([thisYear(), thisYear() - 1, thisYear() - 2, 2024].concat(extra || []));
+  return opts(Array.from(ys).sort((a, b) => b - a), selected);
+}
+
+PAGES.transactions = async token => {
+  const tab = S.txTab;
+  const tabs = '<div class="tabs">' + [['list', 'รายการ'], ['summary', 'สรุปรายปี'], ['recurring', 'รายการประจำเดือน']]
+    .map(t => '<a data-tab="' + t[0] + '" class="' + (tab === t[0] ? 'active' : '') + '">' + t[1] + '</a>').join('') + '</div>';
+  const body = tab === 'list' ? await txListHtml(token) : tab === 'summary' ? await txSummaryHtml(token) : await recurringHtml(token);
+  if (stale(token)) return;
+  $('#main').innerHTML = head('รายรับ-รายจ่าย', '<button class="btn primary" id="tx-add">+ บันทึกรายการ</button>') + tabs + body.html;
+  $$('.tabs a').forEach(a => a.addEventListener('click', () => { S.txTab = a.dataset.tab; refresh(); }));
+  $('#tx-add').addEventListener('click', () => txModal(null, refresh));
+  body.bind && body.bind();
+};
+
+async function txListHtml(token) {
+  const F = S.txFilter;
+  F.year = F.year || thisYear();
+  if (!S.txCache[F.year]) S.txCache[F.year] = await api('transactions', F.year);
+  const all = S.txCache[F.year];
+  const catNames = Array.from(new Set(all.map(t => t.Category))).sort();
+  const accNames = Array.from(new Set(all.map(t => t.Account).filter(Boolean))).sort();
+  const q = (F.q || '').toLowerCase();
+  const list = all.filter(t =>
+    (!F.month || t.Date.slice(5, 7) === F.month) && (!F.type || t.Type === F.type) &&
+    (!F.cat || t.Category === F.cat) && (!F.acc || t.Account === F.acc) &&
+    (!q || (t.Note + ' ' + t.Category + ' ' + t.Account).toLowerCase().indexOf(q) >= 0));
+  const inc = list.filter(t => t.Type === INCOME).reduce((s, t) => s + t.Amount, 0);
+  const exp = list.filter(t => t.Type === EXPENSE).reduce((s, t) => s + t.Amount, 0);
+  const shown = list.slice(0, 500);
+  const html = '<div class="panel"><div class="toolbar" style="margin-bottom:12px">' +
+    '<select id="f-year">' + yearOptions(F.year) + '</select>' +
+    '<select id="f-month"><option value="">ทุกเดือน</option>' + TH_MONTHS.map((m, i) => { const v = ('0' + (i + 1)).slice(-2); return '<option value="' + v + '"' + (F.month === v ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select>' +
+    '<select id="f-type"><option value="">ทุกประเภท</option>' + opts([INCOME, EXPENSE], F.type) + '</select>' +
+    '<select id="f-cat"><option value="">ทุกหมวด</option>' + opts(catNames, F.cat) + '</select>' +
+    '<select id="f-acc"><option value="">ทุกบัญชี</option>' + opts(accNames, F.acc) + '</select>' +
+    '<input id="f-q" placeholder="ค้นหา…" value="' + esc(F.q || '') + '" style="flex:1;min-width:140px">' +
+    '</div>' +
+    '<div class="toolbar small" style="margin-bottom:8px"><span>' + list.length + ' รายการ</span><span class="income">รายรับ ' + money(inc) + '</span><span class="expense">รายจ่าย ' + money(exp) + '</span><span>สุทธิ ' + money(inc - exp) + '</span></div>' +
+    '<div class="table-wrap"><table class="data"><thead><tr><th>วันที่</th><th>หมวด</th><th>รายละเอียด</th><th>บัญชี</th><th class="num">จำนวน</th><th></th></tr></thead><tbody>' +
+    (shown.length ? shown.map(t => '<tr><td>' + dateLabel(t.Date) + '</td><td>' + esc(t.Category) + '</td><td>' + esc(t.Note) +
+      (t.Source.indexOf('import') === 0 ? ' <span class="badge">นำเข้า</span>' : t.Source.indexOf('recurring') === 0 ? ' <span class="badge info">ประจำ</span>' : '') +
+      '</td><td>' + esc(t.Account) + '</td><td class="num ' + (t.Type === INCOME ? 'income' : 'expense') + '">' + (t.Type === INCOME ? '+' : '−') + fmt(t.Amount) + '</td><td style="white-space:nowrap">' +
+      (t.ReceiptUrl ? '<a class="icon-btn" href="' + esc(t.ReceiptUrl) + '" target="_blank" title="ใบเสร็จ">📎</a>' : '') +
+      '<button class="icon-btn" data-edit="' + esc(t.ID) + '" title="แก้ไข">✏️</button><button class="icon-btn" data-del="' + esc(t.ID) + '" title="ลบ">🗑</button></td></tr>').join('')
+      : '<tr><td colspan="6" class="empty">ไม่มีรายการ</td></tr>') +
+    '</tbody></table>' + (list.length > shown.length ? '<div class="muted small" style="padding:8px">แสดง 500 รายการแรก — ใช้ตัวกรองเพื่อดูเพิ่ม</div>' : '') + '</div></div>';
+  return {
+    html,
+    bind: () => {
+      const set = (k, v) => { F[k] = v; refresh(); };
+      $('#f-year').addEventListener('change', e => set('year', +e.target.value));
+      $('#f-month').addEventListener('change', e => set('month', e.target.value));
+      $('#f-type').addEventListener('change', e => set('type', e.target.value));
+      $('#f-cat').addEventListener('change', e => set('cat', e.target.value));
+      $('#f-acc').addEventListener('change', e => set('acc', e.target.value));
+      let qt;
+      $('#f-q').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => { F.q = e.target.value; refresh(); setTimeout(() => { const el = $('#f-q'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0); }, 300); });
+      $$('[data-edit]').forEach(b => b.addEventListener('click', () => txModal(all.find(t => t.ID === b.dataset.edit), refresh)));
+      $$('[data-del]').forEach(b => b.addEventListener('click', () => confirmAction('ลบรายการนี้?', async () => {
+        await api('deleteTransaction', b.dataset.del); delete S.txCache[F.year]; toast('ลบแล้ว'); refresh();
+      })));
+    },
+  };
+}
+
+async function txSummaryHtml(token) {
+  const year = S.sumYear || thisYear();
+  const d = await api('yearSummary', year);
+  const row = (label, values, total, cls) => '<tr><td>' + label + '</td>' + values.map(v => '<td class="num ' + (cls || '') + '">' + (v ? fmt(v, 0) : '<span class="muted">-</span>') + '</td>').join('') +
+    '<td class="num ' + (cls || '') + '"><b>' + fmt(total, 0) + '</b></td></tr>';
+  const sum = a => a.reduce((s, x) => s + x, 0);
+  const section = (title, rows, cls) => '<tr><td colspan="14"><b class="' + cls + '">' + title + '</b></td></tr>' +
+    (rows.length ? rows.map(r => row('&nbsp;&nbsp;' + esc(r.category), r.values, r.total)).join('') : '<tr><td colspan="14" class="muted">-</td></tr>');
+  const html = '<div class="panel"><div class="toolbar" style="margin-bottom:12px"><select id="sum-year">' + yearOptions(year) + '</select></div>' +
+    '<div class="table-wrap"><table class="data"><thead><tr><th>หมวด</th>' + TH_MONTHS.map(m => '<th class="num">' + m + '</th>').join('') + '<th class="num">รวม</th></tr></thead><tbody>' +
+    section('รายรับ', d.income, 'income') + section('รายจ่าย', d.expense, 'expense') +
+    '</tbody><tfoot>' +
+    row('รวมรายรับ', d.totals.income, sum(d.totals.income), 'income') +
+    row('รวมรายจ่าย', d.totals.expense, sum(d.totals.expense), 'expense') +
+    row('เงินออม/ลงทุน', d.totals.saving, sum(d.totals.saving), 'saving') +
+    row('คงเหลือ', d.totals.remaining, sum(d.totals.remaining)) +
+    '</tfoot></table></div></div>';
+  return { html, bind: () => $('#sum-year').addEventListener('change', e => { S.sumYear = +e.target.value; refresh(); }) };
+}
+
+function recurringModal(r) {
+  const isNew = !r;
+  r = r || { Type: EXPENSE, Name: '', Category: '', Amount: '', Account: '', DayOfMonth: 1, Active: true };
+  const catOpts = type => opts(cats(type, r.Category), r.Category, true);
+  openModal({
+    title: isNew ? 'เพิ่มรายการประจำเดือน' : 'แก้ไขรายการประจำเดือน',
+    body: '<div class="form-grid">' +
+      '<div class="full"><div class="seg"><label><input type="radio" name="Type" value="' + EXPENSE + '"' + (r.Type === EXPENSE ? ' checked' : '') + '>รายจ่าย</label>' +
+      '<label><input type="radio" name="Type" value="' + INCOME + '"' + (r.Type === INCOME ? ' checked' : '') + '>รายรับ</label></div></div>' +
+      field('ชื่อรายการ', '<input name="Name" required value="' + esc(r.Name) + '" placeholder="เช่น กยศ., ค่าเน็ตบ้าน">', 'full') +
+      field('หมวด', '<select name="Category">' + catOpts(r.Type) + '</select>') +
+      field('จำนวนเงินปกติ', '<input type="number" step="0.01" name="Amount" value="' + esc(r.Amount) + '">') +
+      field('บัญชี', '<select name="Account">' + opts(accounts(r.Account), r.Account, true) + '</select>') +
+      field('วันที่ของเดือน', '<input type="number" min="1" max="31" name="DayOfMonth" value="' + esc(r.DayOfMonth) + '">') +
+      '<label class="full"><input type="checkbox" name="Active"' + (r.Active ? ' checked' : '') + '> ใช้งาน</label></div>',
+    onOpen: root => $$('input[name=Type]', root).forEach(x => x.addEventListener('change', () => { $('select[name=Category]', root).innerHTML = catOpts(readForm(root).Type); })),
+    onSubmit: async form => {
+      const f = readForm(form);
+      if (!f.Category) throw new Error('กรุณาเลือกหมวด');
+      await api('saveRecurring', Object.assign({ ID: r.ID }, f, { Amount: num(f.Amount), DayOfMonth: num(f.DayOfMonth) }));
+      toast('บันทึกแล้ว'); refresh();
+    },
+  });
+}
+
+async function recurringHtml(token) {
+  const month = S.recMonth || thisMonth();
+  const list = await api('recurring', month);
+  const html = '<div class="panel"><div class="toolbar" style="margin-bottom:12px"><span>บันทึกเข้าเดือน</span><input type="month" id="rec-month" value="' + month + '">' +
+    '<span style="flex:1"></span><button class="btn" id="rec-add">+ เพิ่มรายการประจำ</button><button class="btn primary" id="rec-post">บันทึกรายการที่เลือก</button></div>' +
+    '<table class="data"><thead><tr><th style="width:30px"><input type="checkbox" id="rec-all"></th><th>รายการ</th><th>หมวด</th><th>บัญชี</th><th class="num">วันที่</th><th class="num" style="width:140px">จำนวนเงิน</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
+    (list.length ? list.map(r => '<tr' + (r.Active ? '' : ' class="muted"') + '><td>' + (r.Active && !r.Posted ? '<input type="checkbox" class="rec-chk" value="' + esc(r.ID) + '" checked>' : '') + '</td>' +
+      '<td>' + esc(r.Name) + '</td><td><span class="' + (r.Type === INCOME ? 'income' : 'expense') + '">' + esc(r.Type) + '</span> · ' + esc(r.Category) + '</td><td>' + esc(r.Account) + '</td>' +
+      '<td class="num">' + r.DayOfMonth + '</td><td class="num">' + (r.Active && !r.Posted ? '<input type="number" step="0.01" class="rec-amt" data-id="' + esc(r.ID) + '" value="' + r.Amount + '" style="width:120px;text-align:right">' : fmt(r.Amount)) + '</td>' +
+      '<td>' + (!r.Active ? '<span class="badge">ปิดใช้งาน</span>' : r.Posted ? '<span class="badge ok">บันทึกแล้ว</span>' : '<span class="badge warn">ยังไม่บันทึก</span>') + '</td>' +
+      '<td style="white-space:nowrap"><button class="icon-btn" data-redit="' + esc(r.ID) + '">✏️</button><button class="icon-btn" data-rdel="' + esc(r.ID) + '">🗑</button></td></tr>').join('')
+      : '<tr><td colspan="8" class="empty">ยังไม่มีรายการประจำ — เช่น เงินเดือน, กยศ., ค่าเน็ต</td></tr>') +
+    '</tbody></table><p class="muted small">ติ๊กเลือกแล้วกด "บันทึกรายการที่เลือก" ระบบจะสร้างรายการรายรับ-รายจ่ายให้ (แก้จำนวนเงินของเดือนนี้ได้ก่อนบันทึก) และจะไม่บันทึกซ้ำในเดือนเดียวกัน</p></div>';
+  return {
+    html,
+    bind: () => {
+      $('#rec-month').addEventListener('change', e => { S.recMonth = e.target.value; refresh(); });
+      $('#rec-add').addEventListener('click', () => recurringModal(null));
+      $('#rec-all').addEventListener('change', e => $$('.rec-chk').forEach(c => { c.checked = e.target.checked; }));
+      $('#rec-post').addEventListener('click', async () => {
+        const ids = $$('.rec-chk').filter(c => c.checked).map(c => c.value);
+        if (!ids.length) return toast('ยังไม่ได้เลือกรายการ', true);
+        const amounts = {};
+        $$('.rec-amt').forEach(i => { amounts[i.dataset.id] = num(i.value); });
+        try {
+          const n = await api('postRecurring', ids, month, amounts);
+          S.txCache = {};
+          toast('บันทึกแล้ว ' + n + ' รายการ'); refresh();
+        } catch (e) { toast(errMsg(e), true); }
+      });
+      $$('[data-redit]').forEach(b => b.addEventListener('click', () => recurringModal(list.find(r => r.ID === b.dataset.redit))));
+      $$('[data-rdel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบรายการประจำนี้? (รายการที่บันทึกไปแล้วไม่ถูกลบ)', async () => {
+        await api('deleteRecurring', b.dataset.rdel); toast('ลบแล้ว'); refresh();
+      })));
+    },
+  };
+}
+
+/* =========================================================
+ * เงินออม / ลงทุน
+ * ========================================================= */
+PAGES.invest = async token => {
+  const d = await api('invest');
+  if (stale(token)) return;
+  S.usdRate = d.usdRate;
+  const totalCost = d.funds.reduce((s, f) => s + f.cost, 0);
+  const totalValue = d.funds.reduce((s, f) => s + f.valueTHB, 0);
+  const goals = Object.keys(d.targets).map(g => ({ goal: g, target: d.targets[g], value: d.funds.filter(f => f.Goal === g).reduce((s, f) => s + f.valueTHB, 0) }));
+
+  let html = head('เงินออม / ลงทุน', '<span class="muted small">USD/THB ' + fmt(d.usdRate, 2) + '</span><button class="btn" id="inv-snap">บันทึกยอดสิ้นเดือน</button><button class="btn primary" id="inv-add">+ ลงเงิน</button>');
+  html += '<div class="grid cards">' + cardHtml('มูลค่ารวม', money(totalValue), 'saving') + cardHtml('เงินต้นที่ลงไป', money(totalCost)) +
+    cardHtml('กำไร/ขาดทุน', (totalValue - totalCost >= 0 ? '+' : '') + money(totalValue - totalCost), totalValue - totalCost >= 0 ? 'income' : 'expense', totalCost ? fmt((totalValue - totalCost) / totalCost * 100, 2) + '%' : '') + '</div>';
+
+  html += '<div class="grid three" style="margin-bottom:16px"><div class="panel"><h2>แต่ละกอง</h2><table class="data"><thead><tr><th>กอง</th><th>เป้าหมาย</th><th class="num">เงินต้น</th><th class="num">มูลค่าปัจจุบัน</th><th class="num">กำไร/ขาดทุน</th><th>ยอดล่าสุด</th></tr></thead><tbody>' +
+    d.funds.map(f => '<tr' + (f.Active ? '' : ' class="muted"') + '><td>' + esc(f.Name) + ' <span class="badge">' + esc(f.Currency) + '</span></td><td>' + esc(f.Goal) + '</td><td class="num">' + money(f.cost) +
+      '</td><td class="num">' + money(f.valueTHB) + (f.Currency === 'USD' ? '<div class="small muted">$' + fmt(f.valueFX, 2) + '</div>' : '') + '</td><td class="num ' + (f.gain >= 0 ? 'income' : 'expense') + '">' + (f.gain >= 0 ? '+' : '') + fmt(f.gain) +
+      (f.cost ? '<div class="small">' + fmt(f.gain / f.cost * 100, 2) + '%</div>' : '') + '</td><td class="small muted">' + (f.lastSnapshot ? monthLabel(f.lastSnapshot) : 'ยังไม่บันทึก') + '</td></tr>').join('') +
+    '</tbody></table><p class="muted small">มูลค่าปัจจุบัน = ยอดที่บันทึกล่าสุด + เงินที่ลงเพิ่มหลังจากนั้น (กอง USD คิดด้วยอัตราแลกเปลี่ยนปัจจุบัน)</p></div>' +
+    '<div class="panel"><h2>ความคืบหน้าเป้าหมาย</h2>' + goalsHtml(goals) + '</div></div>';
+
+  html += '<div class="panel" style="margin-bottom:16px"><h2>มูลค่าตามเวลา</h2><div class="chart-box"><canvas id="ch-inv"></canvas></div></div>';
+
+  const batches = {};
+  d.contributions.forEach(c => { (batches[c.BatchID] = batches[c.BatchID] || []).push(c); });
+  const blist = Object.keys(batches).map(k => batches[k]).sort((a, b) => b[0].Date.localeCompare(a[0].Date));
+  html += '<div class="panel"><h2>ประวัติการลงเงิน</h2><div class="table-wrap" style="max-height:420px"><table class="data"><thead><tr><th>วันที่</th><th>แบ่งเข้ากอง</th><th>บัญชี</th><th>หมายเหตุ</th><th class="num">รวม</th><th></th></tr></thead><tbody>' +
+    (blist.length ? blist.map(b => '<tr><td>' + dateLabel(b[0].Date) + '</td><td>' + b.map(c => esc(c.Fund) + ' ' + money(c.AmountTHB) + (c.Currency === 'USD' ? ' <span class="muted small">($' + fmt(c.AmountFX, 2) + ' @' + fmt(c.Rate, 2) + ')</span>' : '')).join('<br>') +
+      '</td><td>' + esc(b[0].Account) + '</td><td>' + esc(b[0].Note) + (b[0].Source.indexOf('import') === 0 ? ' <span class="badge">นำเข้า</span>' : '') + '</td><td class="num saving">' + money(b.reduce((s, c) => s + c.AmountTHB, 0)) +
+      '</td><td style="white-space:nowrap"><button class="icon-btn" data-bedit="' + esc(b[0].BatchID) + '">✏️</button><button class="icon-btn" data-bdel="' + esc(b[0].BatchID) + '">🗑</button></td></tr>').join('')
+      : '<tr><td colspan="6" class="empty">ยังไม่มีการลงเงิน</td></tr>') + '</tbody></table></div></div>';
+  $('#main').innerHTML = html;
+
+  $('#inv-add').addEventListener('click', () => contributionModal(null));
+  $('#inv-snap').addEventListener('click', () => snapshotModal(d));
+  $$('[data-bedit]').forEach(b => b.addEventListener('click', () => contributionModal(batches[b.dataset.bedit])));
+  $$('[data-bdel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบการลงเงินครั้งนี้ทั้งหมด?', async () => {
+    await api('deleteContributionBatch', b.dataset.bdel); toast('ลบแล้ว'); refresh();
+  })));
+
+  // กราฟ: เงินต้นสะสม vs มูลค่าที่บันทึกรายเดือน
+  const months = Array.from(new Set(d.contributions.map(c => c.Date.slice(0, 7)).concat(d.snapshots.map(s => s.Month)))).sort();
+  let cum = 0;
+  const costByMonth = months.map(m => { cum += d.contributions.filter(c => c.Date.slice(0, 7) === m).reduce((s, c) => s + c.AmountTHB, 0); return cum; });
+  const snapTotal = months.map(m => { const ss = d.snapshots.filter(s => s.Month === m); return ss.length ? ss.reduce((s, x) => s + x.ValueTHB, 0) : null; });
+  chart('ch-inv', {
+    type: 'line',
+    data: {
+      labels: months.map(monthLabel),
+      datasets: [
+        { label: 'เงินต้นสะสม', data: costByMonth, borderColor: cssVar('--muted'), backgroundColor: 'transparent', tension: .2, pointRadius: 0 },
+        { label: 'มูลค่าที่บันทึก', data: snapTotal, borderColor: cssVar('--saving'), backgroundColor: cssVar('--saving'), spanGaps: true, tension: .2 },
+      ],
+    },
+    options: { maintainAspectRatio: false, scales: { y: { ticks: moneyTick } }, plugins: { tooltip: moneyTooltip } },
+  });
+};
+
+function contributionModal(batch) {
+  const first = batch ? batch[0] : null;
+  const funds = activeFunds();
+  const byFund = {};
+  (batch || []).forEach(c => { byFund[c.Fund] = c; });
+  // แสดงทุกกองที่ใช้งาน + กองในรายการเดิม (ถ้าถูกปิดไปแล้ว)
+  const names = funds.map(f => f.Name).concat(Object.keys(byFund).filter(n => !funds.some(f => f.Name === n)));
+  const fundOf = n => S.boot.funds.find(f => f.Name === n) || { Name: n, Currency: 'THB' };
+  const rows = names.map(n => {
+    const f = fundOf(n), c = byFund[n];
+    const usd = f.Currency === 'USD';
+    return '<tr data-fund="' + esc(n) + '" data-cur="' + f.Currency + '"><td>' + esc(n) + ' <span class="badge">' + f.Currency + '</span></td>' +
+      '<td><input type="number" step="0.01" class="l-thb" value="' + (c ? c.AmountTHB : '') + '" placeholder="0" style="text-align:right"></td>' +
+      '<td>' + (usd ? '<input type="number" step="0.0001" class="l-rate" value="' + (c ? c.Rate : (S.usdRate || S.boot.usdRate)) + '" style="text-align:right">' : '<span class="muted">-</span>') + '</td>' +
+      '<td class="num l-fx muted">' + (usd ? '' : '') + '</td></tr>';
+  }).join('');
+  openModal({
+    title: batch ? 'แก้ไขการลงเงิน' : 'ลงเงินออม/ลงทุน',
+    wide: true,
+    body: '<div class="form-grid" style="margin-bottom:12px">' +
+      field('วันที่', '<input type="date" name="date" value="' + (first ? first.Date : today()) + '">') +
+      field('จ่ายจากบัญชี', '<select name="account">' + opts(accounts(first && first.Account), first ? first.Account : '', true) + '</select>') +
+      field('หมายเหตุ', '<input name="note" value="' + esc(first ? first.Note : '') + '">', 'full') + '</div>' +
+      '<table class="data lines-table"><thead><tr><th>กอง</th><th>จำนวนเงิน (บาท)</th><th>อัตราแลกเปลี่ยน</th><th class="num">ได้เป็น USD</th></tr></thead><tbody>' + rows +
+      '</tbody><tfoot><tr><td>รวม</td><td class="num" id="l-total">฿0</td><td></td><td></td></tr></tfoot></table>' +
+      '<p class="muted small">ใส่เฉพาะกองที่ลงเงินครั้งนี้ ช่องที่ว่างไว้จะไม่ถูกบันทึก</p>',
+    onOpen: root => {
+      const recalc = () => {
+        let total = 0;
+        $$('tr[data-fund]', root).forEach(tr => {
+          const thb = num($('.l-thb', tr).value);
+          total += thb;
+          const rate = $('.l-rate', tr);
+          if (rate) $('.l-fx', tr).textContent = thb && num(rate.value) ? '$' + fmt(thb / num(rate.value), 2) : '';
+        });
+        $('#l-total', root).textContent = money(total);
+      };
+      root.addEventListener('input', recalc);
+      recalc();
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      const lines = $$('tr[data-fund]', form).map(tr => ({
+        fund: tr.dataset.fund, amountTHB: num($('.l-thb', tr).value), rate: $('.l-rate', tr) ? num($('.l-rate', tr).value) : 1,
+      })).filter(l => l.amountTHB);
+      if (!lines.length) throw new Error('กรุณาใส่จำนวนเงินอย่างน้อย 1 กอง');
+      await api('saveContribution', { BatchID: first ? first.BatchID : '', date: f.date, account: f.account, note: f.note, lines });
+      toast('บันทึกแล้ว'); refresh();
+    },
+  });
+}
+
+function snapshotModal(d) {
+  const month = thisMonth();
+  const funds = d.funds.filter(f => f.Active);
+  openModal({
+    title: 'บันทึกยอดสิ้นเดือน',
+    body: '<div class="form-grid" style="margin-bottom:12px">' + field('เดือน', '<input type="month" name="month" value="' + month + '">') + '</div>' +
+      '<table class="data lines-table"><thead><tr><th>กอง</th><th>ยอดปัจจุบัน (สกุลของกอง)</th><th>อัตราแลกเปลี่ยน</th><th class="num">เป็นบาท</th></tr></thead><tbody>' +
+      funds.map(f => '<tr data-fund="' + esc(f.Name) + '"><td>' + esc(f.Name) + ' <span class="badge">' + f.Currency + '</span></td>' +
+        '<td><input type="number" step="0.01" class="s-val" value="' + f.valueFX + '" style="text-align:right"></td>' +
+        '<td>' + (f.Currency === 'USD' ? '<input type="number" step="0.0001" class="s-rate" value="' + d.usdRate + '" style="text-align:right">' : '<span class="muted">-</span>') + '</td>' +
+        '<td class="num s-thb"></td></tr>').join('') +
+      '</tbody></table><p class="muted small">ใส่ยอดตามที่เห็นในแอปธนาคาร/แอปลงทุน (ค่าที่เติมไว้ให้คือมูลค่าที่ระบบคำนวณ) ถ้าบันทึกเดือนเดิมซ้ำจะแทนที่ของเดิม</p>',
+    onOpen: root => {
+      const recalc = () => $$('tr[data-fund]', root).forEach(tr => {
+        const r = $('.s-rate', tr);
+        $('.s-thb', tr).textContent = money(num($('.s-val', tr).value) * (r ? num(r.value) : 1));
+      });
+      root.addEventListener('input', recalc); recalc();
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      const items = $$('tr[data-fund]', form).filter(tr => $('.s-val', tr).value !== '').map(tr => ({
+        fund: tr.dataset.fund, valueFX: num($('.s-val', tr).value), rate: $('.s-rate', tr) ? num($('.s-rate', tr).value) : 1,
+      }));
+      await api('saveSnapshots', { month: f.month, items });
+      toast('บันทึกยอดแล้ว'); refresh();
+    },
+  });
+}
+
+/* =========================================================
+ * เงินให้ยืม
+ * ========================================================= */
+PAGES.loans = async token => {
+  const list = await api('loans');
+  if (stale(token)) return;
+  const open = list.filter(l => l.status !== 'ปิดยอด');
+  const y = String(thisYear());
+  const interestYear = list.reduce((s, l) => s + l.payments.filter(p => p.Date.slice(0, 4) === y).reduce((a, p) => a + p.Interest, 0), 0);
+  const shown = S.loanShowAll ? list : open;
+  let html = head('เงินให้ยืม', '<label class="small"><input type="checkbox" id="loan-all"' + (S.loanShowAll ? ' checked' : '') + '> แสดงที่ปิดยอดแล้ว</label><button class="btn primary" id="loan-add">+ ให้ยืมใหม่</button>');
+  html += '<div class="grid cards">' + cardHtml('ยอดค้างรวม', money(open.reduce((s, l) => s + l.remaining, 0)), 'expense', open.length + ' รายการ') +
+    cardHtml('ดอกเบี้ยที่คาดว่าจะได้/เดือน', money(open.reduce((s, l) => s + l.monthlyInterest, 0)), 'income') +
+    cardHtml('ดอกเบี้ยรับปี ' + (thisYear() + 543), money(interestYear), 'income', 'นับเป็นรายรับในสรุป') +
+    cardHtml('เกินกำหนด', open.filter(l => l.status === 'เกินกำหนด').length + ' รายการ', open.some(l => l.status === 'เกินกำหนด') ? 'expense' : '') + '</div>';
+  html += '<div class="panel"><div class="table-wrap"><table class="data"><thead><tr><th>รหัส</th><th>ผู้ยืม</th><th>วันที่ยืม</th><th class="num">เงินต้น</th><th>ดอกเบี้ย</th><th>กำหนดชำระ</th><th class="num">รับคืนแล้ว</th><th class="num">คงเหลือ</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
+    (shown.length ? shown.map(l => '<tr><td class="muted">' + esc(l.LoanID) + '</td><td>' + esc(l.Borrower) + (cleanNote(l.Note) ? '<div class="small muted">' + esc(cleanNote(l.Note)) + '</div>' : '') + '</td><td>' + dateLabel(l.Date) +
+      '</td><td class="num">' + fmt(l.Principal) + '</td><td>' + interestLabel(l) + '</td><td>' + (dateLabel(l.DueDate) || '<span class="muted">-</span>') +
+      '</td><td class="num">' + fmt(l.paidPrincipal) + (l.paidInterest ? '<div class="small income">+ดอก ' + fmt(l.paidInterest) + '</div>' : '') + '</td><td class="num"><b>' + fmt(l.remaining) + '</b></td><td>' + loanBadge(l.status) +
+      '</td><td style="white-space:nowrap">' + (l.status !== 'ปิดยอด' ? '<button class="btn sm primary" data-pay="' + esc(l.LoanID) + '">รับชำระ</button> ' : '') +
+      '<button class="icon-btn" data-hist="' + esc(l.LoanID) + '" title="ประวัติ">📜</button><button class="icon-btn" data-ledit="' + esc(l.LoanID) + '" title="แก้ไข">✏️</button><button class="icon-btn" data-ldel="' + esc(l.LoanID) + '" title="ลบ">🗑</button></td></tr>').join('')
+      : '<tr><td colspan="10" class="empty">ไม่มีรายการ</td></tr>') + '</tbody></table></div>' +
+    '<p class="muted small">เงินต้นที่ให้ยืม/รับคืนไม่นับเป็นรายรับ-รายจ่าย เฉพาะดอกเบี้ยที่ได้รับจะนับเป็นรายรับ หมวด "ดอกเบี้ยรับ (เงินให้ยืม)"</p></div>';
+  $('#main').innerHTML = html;
+  const find = id => list.find(l => l.LoanID === id);
+  $('#loan-all').addEventListener('change', e => { S.loanShowAll = e.target.checked; refresh(); });
+  $('#loan-add').addEventListener('click', () => loanModal(null));
+  $$('[data-pay]').forEach(b => b.addEventListener('click', () => paymentModal(find(b.dataset.pay), null)));
+  $$('[data-hist]').forEach(b => b.addEventListener('click', () => historyModal(find(b.dataset.hist))));
+  $$('[data-ledit]').forEach(b => b.addEventListener('click', () => loanModal(find(b.dataset.ledit))));
+  $$('[data-ldel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบรายการให้ยืมนี้และประวัติการรับชำระทั้งหมด?', async () => {
+    await api('deleteLoan', b.dataset.ldel); toast('ลบแล้ว'); refresh();
+  })));
+};
+
+function interestLabel(l) {
+  if (l.InterestType === 'percent') return fmt(l.InterestRate) + '%/เดือน' + (l.monthlyInterest ? '<div class="small muted">≈ ' + fmt(l.monthlyInterest) + '/เดือน</div>' : '');
+  if (l.InterestType === 'other') return esc(l.InterestNote || 'อื่นๆ');
+  return '<span class="muted">ไม่มี</span>';
+}
+
+function loanModal(l) {
+  const isNew = !l;
+  l = l || { Borrower: '', Date: today(), Principal: '', SourceAccount: '', InterestType: 'none', InterestRate: '', InterestNote: '', DueDate: '', PayAccountNo: '', Bank: '', Note: '', Closed: false };
+  const borrowers = Array.from(new Set((S.loanNames || []))).map(n => '<option value="' + esc(n) + '">').join('');
+  openModal({
+    title: isNew ? 'ให้ยืมใหม่' : 'แก้ไข ' + l.LoanID,
+    body: '<div class="form-grid">' +
+      field('ผู้ยืม', '<input name="Borrower" required value="' + esc(l.Borrower) + '" list="borrowers"><datalist id="borrowers">' + borrowers + '</datalist>') +
+      field('วันที่ยืม', '<input type="date" name="Date" value="' + esc(l.Date) + '">') +
+      field('จำนวนเงิน (บาท)', '<input type="number" step="0.01" name="Principal" value="' + esc(l.Principal) + '">') +
+      field('เงินมาจาก (บัญชี)', '<input name="SourceAccount" value="' + esc(l.SourceAccount) + '" list="accs"><datalist id="accs">' + accounts().map(a => '<option value="' + esc(a) + '">').join('') + '</datalist>') +
+      field('ดอกเบี้ย', '<select name="InterestType">' + opts([{ value: 'none', label: 'ไม่มีดอกเบี้ย' }, { value: 'percent', label: '% ต่อเดือน' }, { value: 'other', label: 'อื่นๆ (เช่น ข้าว)' }], l.InterestType) + '</select>') +
+      field('อัตรา % ต่อเดือน', '<input type="number" step="0.01" name="InterestRate" value="' + esc(l.InterestRate) + '">', 'i-rate') +
+      field('รายละเอียดดอกเบี้ย', '<input name="InterestNote" value="' + esc(l.InterestNote) + '">', 'i-note') +
+      field('กำหนดชำระ', '<input type="date" name="DueDate" value="' + esc(l.DueDate) + '">') +
+      field('เลขบัญชีที่โอน', '<input name="PayAccountNo" value="' + esc(l.PayAccountNo) + '">') +
+      field('ธนาคาร', '<input name="Bank" value="' + esc(l.Bank) + '">') +
+      field('หมายเหตุ', '<input name="Note" value="' + esc(cleanNote(l.Note)) + '">', 'full') +
+      (isNew ? '' : '<label class="full"><input type="checkbox" name="Closed"' + (l.Closed ? ' checked' : '') + '> ปิดยอดแล้ว (เช่น ยกยอดไปรวมกับรายการอื่น/ยกหนี้ให้)</label>') + '</div>',
+    onOpen: root => {
+      const sync = () => {
+        const t = $('select[name=InterestType]', root).value;
+        $('.i-rate', root).classList.toggle('hidden', t !== 'percent');
+        $('.i-note', root).classList.toggle('hidden', t !== 'other');
+      };
+      $('select[name=InterestType]', root).addEventListener('change', sync); sync();
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      await api('saveLoan', Object.assign({ LoanID: l.LoanID }, f, { Principal: num(f.Principal), InterestRate: num(f.InterestRate) }));
+      toast('บันทึกแล้ว'); refresh();
+    },
+  });
+}
+
+function paymentModal(l, p) {
+  const isNew = !p;
+  p = p || { Date: today(), Interest: l.monthlyInterest || '', Principal: '', Note: '' };
+  openModal({
+    title: (isNew ? 'รับชำระ' : 'แก้ไขการรับชำระ') + ' · ' + l.Borrower + ' (' + l.LoanID + ')',
+    body: '<p class="muted">คงเหลือ ' + money(l.remaining) + (l.InterestType === 'percent' ? ' · ดอกเบี้ย ' + fmt(l.InterestRate) + '%/เดือน ≈ ' + money(l.monthlyInterest) : '') + '</p>' +
+      '<div class="form-grid">' +
+      field('วันที่รับ', '<input type="date" name="Date" value="' + esc(p.Date) + '">') + '<div></div>' +
+      field('ดอกเบี้ยที่ได้', '<input type="number" step="0.01" name="Interest" value="' + esc(p.Interest) + '">') +
+      field('เงินต้นที่ได้คืน', '<input type="number" step="0.01" name="Principal" value="' + esc(p.Principal) + '">') +
+      field('หมายเหตุ', '<input name="Note" value="' + esc(cleanNote(p.Note)) + '">', 'full') +
+      '<div class="full muted" id="pay-total"></div></div>',
+    onOpen: root => {
+      const recalc = () => { const f = readForm(root); $('#pay-total', root).textContent = 'รวมรับ ' + money(num(f.Interest) + num(f.Principal)) + ' · คงเหลือหลังรับ ' + money(Math.max(0, l.remaining + (isNew ? 0 : num(p.Principal)) - num(f.Principal))); };
+      root.addEventListener('input', recalc); recalc();
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      await api('savePayment', { ID: p.ID, LoanID: l.LoanID, Date: f.Date, Interest: num(f.Interest), Principal: num(f.Principal), Note: f.Note });
+      toast('บันทึกแล้ว'); refresh();
+    },
+  });
+}
+
+function historyModal(l) {
+  openModal({
+    title: 'ประวัติรับชำระ · ' + l.Borrower + ' (' + l.LoanID + ')',
+    wide: true, noSubmit: true,
+    body: '<p class="muted">เงินต้น ' + money(l.Principal) + ' · รับคืนแล้ว ' + money(l.paidPrincipal) + ' · ดอกเบี้ยรับ ' + money(l.paidInterest) + ' · คงเหลือ ' + money(l.remaining) + '</p>' +
+      '<table class="data"><thead><tr><th>งวด</th><th>วันที่</th><th class="num">ดอกเบี้ย</th><th class="num">เงินต้น</th><th class="num">รวม</th><th>หมายเหตุ</th><th></th></tr></thead><tbody>' +
+      (l.payments.length ? l.payments.map((p, i) => '<tr><td>' + (i + 1) + '</td><td>' + dateLabel(p.Date) + '</td><td class="num">' + fmt(p.Interest) + '</td><td class="num">' + fmt(p.Principal) + '</td><td class="num">' + fmt(p.Total) +
+        '</td><td>' + esc(cleanNote(p.Note)) + '</td><td style="white-space:nowrap"><button type="button" class="icon-btn" data-pedit="' + esc(p.ID) + '">✏️</button><button type="button" class="icon-btn" data-pdel="' + esc(p.ID) + '">🗑</button></td></tr>').join('')
+        : '<tr><td colspan="7" class="empty">ยังไม่มีการรับชำระ</td></tr>') + '</tbody></table>',
+    onOpen: root => {
+      $$('[data-pedit]', root).forEach(b => b.addEventListener('click', () => paymentModal(l, l.payments.find(p => p.ID === b.dataset.pedit))));
+      $$('[data-pdel]', root).forEach(b => b.addEventListener('click', () => confirmAction('ลบงวดนี้?', async () => {
+        await api('deletePayment', b.dataset.pdel); closeModal(); toast('ลบแล้ว'); refresh();
+      })));
+    },
+  });
+}
+
+/* =========================================================
+ * ภาษี
+ * ========================================================= */
+const TAX_DED = [
+  ['Ded_Expense', 'ค่าใช้จ่าย (เว้นว่าง = 50% ไม่เกิน 100,000 อัตโนมัติ)'],
+  ['Ded_Personal', 'ลดหย่อนส่วนตัว'],
+  ['Ded_Family', 'ลดหย่อนบิดามารดา/ครอบครัว'],
+  ['Ded_Insurance', 'เบี้ยประกันชีวิต/สุขภาพ'],
+  ['Ded_SocialSecurity', 'ประกันสังคม'],
+  ['Ded_Fund', 'กองทุน (SSF/RMF/PVD/ThaiESG)'],
+  ['Ded_Property', 'ดอกเบี้ยบ้าน/อสังหา'],
+  ['Ded_Other', 'อื่นๆ (เช่น Easy e-Receipt, บริจาค)'],
+];
+
+function calcTax(row, autoIncome, brackets) {
+  const v = k => (isBlank(row[k]) ? null : num(row[k]));
+  const income = v('IncomeOverride') !== null ? v('IncomeOverride') : autoIncome;
+  const dedExpense = v('Ded_Expense') !== null ? v('Ded_Expense') : Math.min(income * 0.5, 100000);
+  const deds = TAX_DED.map(d => ({ key: d[0], label: d[1], value: d[0] === 'Ded_Expense' ? dedExpense : (v(d[0]) || 0) }));
+  const totalDed = deds.reduce((s, d) => s + d.value, 0);
+  const net = Math.max(0, income - totalDed);
+  const steps = [];
+  let tax = 0;
+  brackets.forEach(b => {
+    const upper = isBlank(b.Max) ? Infinity : num(b.Max);
+    if (net <= b.Min) return;
+    const part = Math.min(net, upper) - b.Min;
+    const t = part * b.Rate / 100;
+    tax += t;
+    steps.push({ range: fmt(b.Min, 0) + ' – ' + (upper === Infinity ? 'ขึ้นไป' : fmt(upper, 0)), rate: b.Rate, part, tax: t });
+  });
+  const finalTax = v('TaxOverride') !== null ? v('TaxOverride') : tax;
+  const withheld = v('Withheld') || 0;
+  return { income, deds, totalDed, net, steps, tax, finalTax, withheld, diff: finalTax - withheld };
+}
+
+PAGES.tax = async token => {
+  const year = S.taxYear || thisYear();
+  const d = await api('tax', year);
+  if (stale(token)) return;
+  const r = d.row;
+  const years = d.years.indexOf(year) < 0 ? d.years.concat([year]) : d.years;
+  const inp = (k, ph) => '<input type="number" step="0.01" name="' + k + '" value="' + esc(r[k]) + '" placeholder="' + esc(ph || '0') + '" style="text-align:right">';
+  let html = head('ภาษีเงินได้', '<select id="tax-year">' + opts(years.sort((a, b) => b - a).map(y => ({ value: y, label: 'ปี ' + y + ' (พ.ศ. ' + (y + 543) + ')' })), year) + '</select>' +
+    '<button class="btn" id="tax-new">+ ปีอื่น</button>');
+  html += '<div class="grid two"><form class="panel" id="tax-form"><h2>ข้อมูลปี ' + year + (r.saved ? '' : ' <span class="badge warn">ยังไม่ได้บันทึก</span>') + '</h2><div class="form-grid">' +
+    field('รายได้ทั้งปี (เว้นว่าง = ดึงจากรายการรายรับ ' + money(d.autoIncome) + ')', inp('IncomeOverride', fmt(d.autoIncome, 2)), 'full') +
+    field('ภาษีหัก ณ ที่จ่ายแล้ว', inp('Withheld'), 'full') +
+    TAX_DED.map(x => field(x[1], inp(x[0], x[0] === 'Ded_Expense' ? 'อัตโนมัติ' : '0'))).join('') +
+    field('ภาษีที่ต้องจ่าย (เว้นว่าง = ตามที่คำนวณ)', inp('TaxOverride', 'อัตโนมัติ'), 'full') +
+    field('หมายเหตุ', '<input name="Note" value="' + esc(cleanNote(r.Note)) + '">', 'full') +
+    '</div><div class="toolbar" style="margin-top:14px;justify-content:flex-end"><button type="button" class="btn ghost" id="tax-reset">คืนค่าที่บันทึกไว้</button><button type="submit" class="btn primary">บันทึก</button></div>' +
+    '<p class="muted small">ลองเปลี่ยนตัวเลขเพื่อจำลองการคำนวณได้เลย ผลด้านขวาจะเปลี่ยนตาม (ยังไม่บันทึกจนกว่าจะกด บันทึก)</p></form>' +
+    '<div class="panel" id="tax-result"></div></div>';
+  $('#main').innerHTML = html;
+
+  const form = $('#tax-form');
+  const render = () => {
+    const c = calcTax(readForm(form), d.autoIncome, d.brackets);
+    $('#tax-result').innerHTML = '<h2>ผลการคำนวณ</h2><table class="data"><tbody>' +
+      '<tr><td>รายได้ทั้งปี</td><td class="num">' + money(c.income) + '</td></tr>' +
+      c.deds.filter(x => x.value).map(x => '<tr><td class="muted">&nbsp;&nbsp;หัก ' + esc(x.label.replace(/ \(.*\)/, '')) + '</td><td class="num muted">−' + fmt(x.value) + '</td></tr>').join('') +
+      '<tr><td>รวมค่าใช้จ่าย + ลดหย่อน</td><td class="num">−' + money(c.totalDed) + '</td></tr>' +
+      '<tr><td><b>เงินได้สุทธิ</b></td><td class="num"><b>' + money(c.net) + '</b></td></tr></tbody></table>' +
+      '<h2 style="margin-top:16px">ภาษีตามขั้นบันได</h2><table class="data"><thead><tr><th>ช่วงเงินได้สุทธิ</th><th class="num">อัตรา</th><th class="num">ส่วนที่คิด</th><th class="num">ภาษี</th></tr></thead><tbody>' +
+      (c.steps.length ? c.steps.map(s => '<tr><td>' + s.range + '</td><td class="num">' + s.rate + '%</td><td class="num">' + fmt(s.part) + '</td><td class="num">' + fmt(s.tax) + '</td></tr>').join('') : '<tr><td colspan="4" class="empty">-</td></tr>') +
+      '</tbody><tfoot><tr><td colspan="3">ภาษีที่คำนวณได้</td><td class="num">' + money(c.tax) + '</td></tr></tfoot></table>' +
+      '<div class="grid cards" style="margin-top:16px">' + cardHtml('ภาษีทั้งปี', money(c.finalTax), '', isBlank(readForm(form).TaxOverride) ? '' : 'ใช้ค่าที่แก้เอง') + cardHtml('หัก ณ ที่จ่ายแล้ว', money(c.withheld)) +
+      cardHtml(c.diff > 0 ? 'ต้องจ่ายเพิ่ม' : 'ได้คืน', money(Math.abs(c.diff)), c.diff > 0 ? 'expense' : 'income') + '</div>';
+  };
+  form.addEventListener('input', render);
+  render();
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    try { await api('saveTax', Object.assign({ Year: year }, readForm(form))); toast('บันทึกแล้ว'); refresh(); } catch (err) { toast(errMsg(err), true); }
+  });
+  $('#tax-reset').addEventListener('click', refresh);
+  $('#tax-year').addEventListener('change', e => { S.taxYear = +e.target.value; refresh(); });
+  $('#tax-new').addEventListener('click', () => {
+    const y = parseInt(prompt('ปี ค.ศ. (เช่น ' + (thisYear() + 1) + ')', thisYear() + 1), 10);
+    if (y > 1900 && y < 2200) { S.taxYear = y; refresh(); }
+  });
+};
+
+/* =========================================================
+ * ผลตรวจสุขภาพ
+ * ========================================================= */
+function rangeText(i) {
+  if (!isBlank(i.Min) && !isBlank(i.Max)) return fmt(i.Min) + ' – ' + fmt(i.Max);
+  if (!isBlank(i.Min)) return '≥ ' + fmt(i.Min);
+  if (!isBlank(i.Max)) return '≤ ' + fmt(i.Max);
+  return '';
+}
+function rangeClass(i, v) {
+  if (isBlank(v)) return '';
+  const n = parseFloat(v);
+  if (!isFinite(n)) return '';
+  if (!isBlank(i.Max) && n > num(i.Max)) return 'cell-high';
+  if (!isBlank(i.Min) && n < num(i.Min)) return 'cell-low';
+  return '';
+}
+
+PAGES.health = async token => {
+  const d = await api('health');
+  if (stale(token)) return;
+  S.health = d;
+  const items = d.items.filter(i => i.Active || d.visits.some(v => !isBlank(v.values[i.Name])));
+  const visits = d.visits;
+  let html = head('ผลตรวจสุขภาพรายปี', '<button class="btn primary" id="h-add">+ บันทึกผลตรวจ</button>');
+  if (!visits.length) {
+    html += '<div class="panel empty">ยังไม่มีผลตรวจ — กด "บันทึกผลตรวจ" เพื่อเริ่ม<br><span class="small">เพิ่ม/แก้รายการตรวจและเกณฑ์ปกติได้ที่หน้า ตั้งค่า</span></div>';
+    $('#main').innerHTML = html;
+    $('#h-add').addEventListener('click', () => visitModal(null));
+    return;
+  }
+  const latest = visits[0];
+  const flagged = items.filter(i => rangeClass(i, latest.values[i.Name]));
+  html += '<div class="grid cards">' + cardHtml('ตรวจล่าสุด', dateLabel(latest.Date), '', latest.Hospital) +
+    cardHtml('ค่าที่ผิดปกติ (ครั้งล่าสุด)', flagged.length + ' รายการ', flagged.length ? 'expense' : 'income', flagged.map(i => i.Name).join(', ')) +
+    cardHtml('จำนวนครั้งที่บันทึก', visits.length + ' ครั้ง') + '</div>';
+  let group = null;
+  html += '<div class="panel" style="margin-bottom:16px"><div class="table-wrap"><table class="data"><thead><tr><th>รายการตรวจ</th><th>เกณฑ์ปกติ</th>' +
+    visits.map(v => '<th class="num">' + dateLabel(v.Date) + '<div class="small">' + esc(v.Hospital) + '</div><div>' + (v.FileUrl ? '<a class="icon-btn" href="' + esc(v.FileUrl) + '" target="_blank" title="ไฟล์ผลตรวจ">📎</a>' : '') +
+      '<button class="icon-btn" data-vedit="' + esc(v.VisitID) + '">✏️</button><button class="icon-btn" data-vdel="' + esc(v.VisitID) + '">🗑</button></div></th>').join('') + '</tr></thead><tbody>' +
+    items.map(i => {
+      let g = '';
+      if (i.Group !== group) { group = i.Group; g = '<tr><td colspan="' + (2 + visits.length) + '"><b>' + esc(group || 'อื่นๆ') + '</b></td></tr>'; }
+      return g + '<tr><td><a data-chart="' + esc(i.Name) + '" style="cursor:pointer">' + esc(i.Name) + '</a> <span class="muted small">' + esc(i.Unit) + '</span></td><td class="muted small">' + rangeText(i) + '</td>' +
+        visits.map(v => { const val = v.values[i.Name]; return '<td class="num ' + rangeClass(i, val) + '">' + (isBlank(val) ? '<span class="muted">-</span>' : esc(val)) + '</td>'; }).join('') + '</tr>';
+    }).join('') + '</tbody></table></div><p class="muted small"><span class="cell-high">สีแดง</span> = สูงกว่าเกณฑ์ · <span class="cell-low">สีส้ม</span> = ต่ำกว่าเกณฑ์ · คลิกชื่อรายการเพื่อดูกราฟ</p></div>';
+  const chartItem = S.healthItem && items.some(i => i.Name === S.healthItem) ? S.healthItem : (items.find(i => visits.some(v => isFinite(parseFloat(v.values[i.Name])))) || {}).Name;
+  html += '<div class="panel"><h2>แนวโน้ม<span class="spacer"></span><select id="h-item">' + opts(items.map(i => i.Name), chartItem) + '</select></h2><div class="chart-box"><canvas id="ch-health"></canvas></div></div>';
+  if (visits.some(v => v.Note)) html += '<div class="panel" style="margin-top:16px"><h2>บันทึกเพิ่มเติม</h2>' + visits.filter(v => v.Note).map(v => '<p><b>' + dateLabel(v.Date) + '</b> ' + esc(v.Note) + '</p>').join('') + '</div>';
+  $('#main').innerHTML = html;
+
+  $('#h-add').addEventListener('click', () => visitModal(null));
+  $$('[data-vedit]').forEach(b => b.addEventListener('click', () => visitModal(visits.find(v => v.VisitID === b.dataset.vedit))));
+  $$('[data-vdel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบผลตรวจครั้งนี้?', async () => {
+    await api('deleteVisit', b.dataset.vdel); toast('ลบแล้ว'); refresh();
+  })));
+  const draw = name => {
+    const item = items.find(i => i.Name === name);
+    if (!item) return;
+    const asc = visits.slice().reverse().filter(v => isFinite(parseFloat(v.values[name])));
+    const ds = [{ label: name, data: asc.map(v => parseFloat(v.values[name])), borderColor: cssVar('--primary'), backgroundColor: cssVar('--primary'), tension: .2 }];
+    if (!isBlank(item.Max)) ds.push({ label: 'สูงสุดปกติ', data: asc.map(() => num(item.Max)), borderColor: cssVar('--bad'), borderDash: [6, 4], pointRadius: 0, fill: false });
+    if (!isBlank(item.Min)) ds.push({ label: 'ต่ำสุดปกติ', data: asc.map(() => num(item.Min)), borderColor: cssVar('--warn'), borderDash: [6, 4], pointRadius: 0, fill: false });
+    chart('ch-health', { type: 'line', data: { labels: asc.map(v => dateLabel(v.Date)), datasets: ds }, options: { maintainAspectRatio: false } });
+  };
+  $('#h-item').addEventListener('change', e => { S.healthItem = e.target.value; draw(e.target.value); });
+  $$('[data-chart]').forEach(a => a.addEventListener('click', () => { S.healthItem = a.dataset.chart; $('#h-item').value = a.dataset.chart; draw(a.dataset.chart); $('#ch-health').scrollIntoView({ behavior: 'smooth' }); }));
+  if (chartItem) draw(chartItem);
+};
+
+function visitModal(v) {
+  const isNew = !v;
+  v = v || { Date: today(), Hospital: (S.health && S.health.visits[0] && S.health.visits[0].Hospital) || '', FileUrl: '', Note: '', values: {} };
+  const items = S.health.items.filter(i => i.Active || !isBlank(v.values[i.Name]));
+  let group = null;
+  openModal({
+    title: isNew ? 'บันทึกผลตรวจสุขภาพ' : 'แก้ไขผลตรวจ ' + dateLabel(v.Date),
+    wide: true,
+    body: '<div class="form-grid" style="margin-bottom:14px">' +
+      field('วันที่ตรวจ', '<input type="date" name="Date" value="' + esc(v.Date) + '">') +
+      field('สถานที่ตรวจ', '<input name="Hospital" value="' + esc(v.Hospital) + '" placeholder="เช่น รพ.…">') +
+      field('ไฟล์ผลตรวจ (PDF/รูป)', '<input type="file" name="file" accept="image/*,application/pdf">' + (v.FileUrl ? '<span class="small">ไฟล์เดิม: <a href="' + esc(v.FileUrl) + '" target="_blank">เปิดดู</a></span>' : ''), 'full') +
+      field('หมายเหตุ / คำแนะนำแพทย์', '<input name="Note" value="' + esc(v.Note) + '">', 'full') + '</div>' +
+      '<table class="data"><thead><tr><th>รายการ</th><th>เกณฑ์ปกติ</th><th style="width:160px">ผล</th></tr></thead><tbody>' +
+      items.map(i => {
+        let g = '';
+        if (i.Group !== group) { group = i.Group; g = '<tr><td colspan="3"><b>' + esc(group || 'อื่นๆ') + '</b></td></tr>'; }
+        return g + '<tr><td>' + esc(i.Name) + ' <span class="muted small">' + esc(i.Unit) + '</span></td><td class="muted small">' + rangeText(i) + '</td>' +
+          '<td><input class="h-val" data-item="' + esc(i.Name) + '" value="' + esc(isBlank(v.values[i.Name]) ? '' : v.values[i.Name]) + '" style="width:100%;text-align:right"></td></tr>';
+      }).join('') + '</tbody></table><p class="muted small">เว้นว่างรายการที่ไม่ได้ตรวจ · ใส่ข้อความได้ เช่น "Negative"</p>',
+    onOpen: root => {
+      const paint = el => { const i = items.find(x => x.Name === el.dataset.item); el.className = 'h-val ' + rangeClass(i, el.value); };
+      $$('.h-val', root).forEach(paint);
+      root.addEventListener('input', e => { if (e.target.classList.contains('h-val')) paint(e.target); });
+    },
+    onSubmit: async form => {
+      const f = readForm(form);
+      if (!f.Date) throw new Error('กรุณาเลือกวันที่');
+      const values = {};
+      $$('.h-val', form).forEach(el => { if (el.value.trim() !== '') values[el.dataset.item] = el.value.trim(); });
+      let url = v.FileUrl;
+      const up = await uploadIfAny($('input[name=file]', form), 'health');
+      if (up) url = up;
+      await api('saveVisit', { VisitID: v.VisitID, Date: f.Date, Hospital: f.Hospital, FileUrl: url, Note: f.Note, values });
+      toast('บันทึกแล้ว'); refresh();
+    },
+  });
+}
+
+/* =========================================================
+ * ตั้งค่า
+ * ========================================================= */
+const SETTINGS = [
+  { key: 'categories', title: 'หมวดหมู่รายรับ-รายจ่าย และงบประมาณ', note: 'งบ/เดือน ใช้กับหมวดรายจ่าย · เปลี่ยนชื่อหมวดจะไม่เปลี่ยนชื่อในรายการที่บันทึกไปแล้ว (ปิดใช้งานแทนการลบ)',
+    cols: [{ k: 'Type', l: 'ประเภท', t: 'select', o: () => [INCOME, EXPENSE] }, { k: 'Name', l: 'ชื่อหมวด' }, { k: 'MonthlyBudget', l: 'งบ/เดือน', t: 'number' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
+  { key: 'accounts', title: 'บัญชี / ช่องทางจ่าย', cols: [{ k: 'Name', l: 'ชื่อบัญชี' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
+  { key: 'funds', title: 'กองเงินออม / ลงทุน', note: 'เป้าหมาย: ใช้รวมยอดเทียบเป้าฉุกเฉิน/เกษียณ · เปลี่ยนชื่อกองจะทำให้ประวัติเดิมไม่ผูกกับกองนี้',
+    cols: [{ k: 'Name', l: 'ชื่อกอง' }, { k: 'Currency', l: 'สกุลเงิน', t: 'select', o: () => ['THB', 'USD'] }, { k: 'Goal', l: 'เป้าหมาย', t: 'select', o: () => S.boot.goals }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
+  { key: 'healthItems', title: 'รายการตรวจสุขภาพ และเกณฑ์ปกติ', note: 'เว้นว่างค่าต่ำสุด/สูงสุดได้ถ้าไม่มีเกณฑ์ด้านนั้น · ลำดับ ใช้เรียงในตาราง',
+    cols: [{ k: 'Name', l: 'ชื่อรายการ' }, { k: 'Unit', l: 'หน่วย' }, { k: 'Min', l: 'ต่ำสุดปกติ', t: 'number' }, { k: 'Max', l: 'สูงสุดปกติ', t: 'number' }, { k: 'Group', l: 'กลุ่ม' }, { k: 'Order', l: 'ลำดับ', t: 'number' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
+  { key: 'config', title: 'เป้าหมายและค่าตั้งค่า', cols: [{ k: 'Key', l: 'คีย์', t: 'ro' }, { k: 'Value', l: 'ค่า' }, { k: 'Description', l: 'คำอธิบาย', t: 'ro' }], fixed: true },
+  { key: 'taxBrackets', title: 'ขั้นภาษีเงินได้', note: 'เงินได้สุทธิ ตั้งแต่ (Min) ถึง (Max) อัตรา % · Max ว่าง = ขึ้นไป',
+    cols: [{ k: 'Min', l: 'ตั้งแต่', t: 'number' }, { k: 'Max', l: 'ถึง', t: 'number' }, { k: 'Rate', l: 'อัตรา %', t: 'number' }] },
+];
+
+PAGES.settings = async token => {
+  let html = head('ตั้งค่า');
+  html += '<div class="grid">' + SETTINGS.map(s => '<div class="panel" id="set-' + s.key + '"><h2>' + s.title + '<span class="spacer"></span>' +
+    (s.fixed ? '' : '<button class="btn sm" data-addrow="' + s.key + '">+ เพิ่มแถว</button>') + '<button class="btn sm primary" data-save="' + s.key + '">บันทึก</button></h2>' +
+    (s.note ? '<p class="muted small" style="margin-top:-6px">' + s.note + '</p>' : '') + '<div class="grid-body loading">กำลังโหลด…</div></div>').join('') + '</div>' +
+    '<p class="muted small">แก้ไขโดยตรงในแท็บ App_… ของ Google Sheet ก็ได้ ข้อมูลจะตรงกัน</p>';
+  $('#main').innerHTML = html;
+  await Promise.all(SETTINGS.map(async s => {
+    const d = await api('getTable', s.key);
+    if (stale(token)) return;
+    renderGrid(s, d.rows);
+  }));
+  $$('[data-addrow]').forEach(b => b.addEventListener('click', () => {
+    const s = SETTINGS.find(x => x.key === b.dataset.addrow);
+    const rows = gridRows(s);
+    const blank = {};
+    s.cols.forEach(c => { blank[c.k] = c.t === 'check' ? true : ''; });
+    rows.push(blank);
+    renderGrid(s, rows);
+  }));
+  $$('[data-save]').forEach(b => b.addEventListener('click', async () => {
+    const s = SETTINGS.find(x => x.key === b.dataset.save);
+    b.disabled = true;
+    try {
+      const n = await api('saveTable', s.key, gridRows(s));
+      S.boot = await api('bootstrap');
+      toast('บันทึก ' + s.title + ' แล้ว (' + n + ' แถว)');
+    } catch (e) { toast(errMsg(e), true); } finally { b.disabled = false; }
+  }));
+};
+
+function renderGrid(s, rows) {
+  const body = $('#set-' + s.key + ' .grid-body');
+  body.classList.remove('loading');
+  body.innerHTML = '<div class="table-wrap" style="max-height:420px"><table class="data grid-editor"><thead><tr>' + s.cols.map(c => '<th>' + c.l + '</th>').join('') + (s.fixed ? '' : '<th></th>') + '</tr></thead><tbody>' +
+    rows.map((r, idx) => '<tr data-idx="' + idx + '">' + s.cols.map(c => {
+      const v = r[c.k];
+      let input;
+      if (c.t === 'check') input = '<input type="checkbox" data-k="' + c.k + '"' + (truthy(v) ? ' checked' : '') + '>';
+      else if (c.t === 'select') input = '<select data-k="' + c.k + '">' + opts(c.o(), v, true) + '</select>';
+      else if (c.t === 'ro') input = '<span data-k="' + c.k + '" data-v="' + esc(v) + '" class="small">' + esc(v) + '</span>';
+      else input = '<input data-k="' + c.k + '"' + (c.t === 'number' ? ' type="number" step="any"' : '') + ' value="' + esc(v) + '">';
+      return '<td' + (c.t === 'check' ? ' style="text-align:center;width:60px"' : '') + '>' + input + '</td>';
+    }).join('') + (s.fixed ? '' : '<td style="width:36px"><button class="icon-btn" data-delrow title="ลบแถว">✕</button></td>') + '</tr>').join('') +
+    '</tbody></table></div>';
+  $$('[data-delrow]', body).forEach(b => b.addEventListener('click', () => {
+    const rowsNow = gridRows(s);
+    rowsNow.splice(+b.closest('tr').dataset.idx, 1);
+    renderGrid(s, rowsNow);
+  }));
+}
+
+function gridRows(s) {
+  return $$('#set-' + s.key + ' tbody tr').map(tr => {
+    const o = {};
+    s.cols.forEach(c => {
+      const el = $('[data-k="' + c.k + '"]', tr);
+      if (!el) return;
+      if (c.t === 'check') o[c.k] = el.checked;
+      else if (c.t === 'ro') o[c.k] = el.dataset.v;
+      else if (c.t === 'number') o[c.k] = el.value === '' ? '' : Number(el.value);
+      else o[c.k] = el.value;
+    });
+    return o;
+  });
+}
+
+/* ---------- เริ่มต้น ---------- */
+(async function init() {
+  try {
+    S.boot = await api('bootstrap');
+    go('dashboard');
+    api('loans').then(l => { S.loanNames = l.map(x => x.Borrower); }).catch(() => {});
+  } catch (e) {
+    $('#main').innerHTML = '<div class="panel"><h2>เริ่มต้นไม่สำเร็จ</h2><p class="error">' + esc(errMsg(e)) + '</p>' +
+      '<p>ถ้ายังไม่ได้ติดตั้ง ให้เปิด Google Sheet → เมนู <b>💰 แอปการเงิน → 1) ติดตั้ง</b> แล้วโหลดหน้านี้ใหม่</p></div>';
+  }
+})();
+</script>
