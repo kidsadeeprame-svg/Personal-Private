@@ -1404,6 +1404,7 @@ async function instHtml() {
 (async function init() {
   try {
     S.boot = await api('bootstrap');
+    $('#ver').textContent = 'เวอร์ชัน ' + (S.boot.codeVersion || '-');
     go('dashboard');
     api('loans').then(l => { S.loanNames = l.map(x => x.Borrower); }).catch(() => {});
   } catch (e) {

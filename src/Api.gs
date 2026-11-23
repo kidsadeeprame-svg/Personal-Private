@@ -104,6 +104,7 @@ function apiBootstrap_() {
     planItems: planItems_().map(i => ({ Type: i.Type, Category: i.Category, Name: i.Name })),
     usdRate: usdRate_(),
     interestCategory: INTEREST_CATEGORY,
+    codeVersion: (PropertiesService.getScriptProperties().getProperty('CODE_SHA') || '').slice(0, 7),
     goals: [GOAL_EMERGENCY, GOAL_RETIREMENT, GOAL_OTHER],
   };
 }
