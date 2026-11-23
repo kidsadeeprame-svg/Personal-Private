@@ -76,13 +76,15 @@ const WRITE_APIS_ = ['saveTransaction', 'deleteTransaction', 'saveRecurring', 'd
   'savePlanItem', 'deletePlanItem'];
 
 function api(name, argsJson) {
+  const t0 = Date.now();
   guard_();
   const fn = API_[name];
   if (!fn) throw new Error('ไม่รู้จักคำสั่ง ' + name);
   const args = JSON.parse(argsJson || '[]');
   const run = () => fn.apply(null, args);
   const result = WRITE_APIS_.indexOf(name) >= 0 ? withLock_(run) : run();
-  return JSON.stringify(result === undefined ? null : result, function (key, val) {
+  // ส่งเวลาประมวลผลฝั่งเซิร์ฟเวอร์กลับไปด้วย (แสดงที่มุมซ้ายล่างของเว็บ)
+  return JSON.stringify({ r: result === undefined ? null : result, ms: Date.now() - t0 }, function (key, val) {
     const raw = this[key];
     if (raw instanceof Date) return fmtDate_(raw);
     if (key === '_row') return undefined;

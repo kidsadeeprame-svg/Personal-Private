@@ -35,12 +35,30 @@ const READ_APIS = ['dashboard', 'transactions', 'yearSummary', 'recurring', 'inv
 const API_CACHE = {};
 const CACHE_MS = 5 * 60 * 1000;
 function apiRaw(name, args) {
+  const t = performance.now();
+  const background = !!S.inPrefetch;
   return new Promise((resolve, reject) => {
     google.script.run
-      .withSuccessHandler(r => resolve(r ? JSON.parse(r) : r))
+      .withSuccessHandler(raw => {
+        const env = raw ? JSON.parse(raw) : { r: null, ms: 0 };
+        if (!background) showTiming(name, performance.now() - t, env.ms);
+        resolve(env.r);
+      })
       .withFailureHandler(e => reject(e))
       .api(name, JSON.stringify(args));
   });
+}
+/** แสดงเวลาโหลดล่าสุดที่มุมซ้ายล่าง: รวมทั้งหมด (เซิร์ฟเวอร์ประมวลผล) */
+function showTiming(name, totalMs, serverMs) {
+  S.timing = name + ' ' + (totalMs / 1000).toFixed(1) + 's (เซิร์ฟเวอร์ ' + (serverMs / 1000).toFixed(1) + 's)';
+  renderVer();
+}
+function renderVer() {
+  const el = $('#ver');
+  if (!el) return;
+  el.innerHTML = 'เวอร์ชัน ' + esc((S.boot && S.boot.codeVersion) || '-') +
+    (S.pageLoad ? '<br>เปิดเว็บ ' + (S.pageLoad / 1000).toFixed(1) + 's' : '') +
+    (S.timing ? '<br>' + esc(S.timing) : '');
 }
 function api(name) {
   const args = Array.prototype.slice.call(arguments, 1);
@@ -188,7 +206,11 @@ async function confirmAction(msg, fn) {
 function chart(id, config) {
   if (S.charts[id]) S.charts[id].destroy();
   const el = document.getElementById(id);
-  if (!el || typeof Chart === 'undefined') return;
+  if (!el) return;
+  if (typeof Chart === 'undefined') { // Chart.js ยังโหลดไม่เสร็จ (โหลดแบบไม่ขวางหน้าเว็บ) — รอแล้ววาดทีหลัง
+    window.addEventListener('load', () => { if (document.getElementById(id) === el) chart(id, config); }, { once: true });
+    return;
+  }
   Chart.defaults.color = cssVar('--muted');
   Chart.defaults.borderColor = cssVar('--line');
   Chart.defaults.font.family = "'IBM Plex Sans Thai', system-ui, sans-serif";
@@ -1435,6 +1457,16 @@ async function instHtml() {
   };
 }
 
+/** โหลดข้อมูลหน้าอื่นล่วงหน้า (ทำพร้อมกันเบื้องหลัง) เพื่อให้กดเปลี่ยนหน้าแล้วแสดงทันที */
+function prefetch() {
+  const y = thisYear(), m = thisMonth();
+  S.inPrefetch = true;
+  S.txCache[y] || api('transactions', y).then(r => { S.txCache[y] = S.txCache[y] || r; }).catch(() => {});
+  [['plan', m, 12], ['loans'], ['invest'], ['planVsActual', m], ['health'], ['tax', y], ['recurring', m], ['installments', m]]
+    .forEach(a => api.apply(null, a).catch(() => {}));
+  S.inPrefetch = false;
+}
+
 /* ---------- เริ่มต้น ---------- */
 (async function init() {
   try {
@@ -1442,8 +1474,10 @@ async function instHtml() {
     const first = await apiRaw('init', [month]);
     S.boot = first.boot;
     API_CACHE['dashboard' + JSON.stringify([month])] = { t: Date.now(), v: JSON.stringify(first.dashboard) };
-    $('#ver').textContent = 'เวอร์ชัน ' + (S.boot.codeVersion || '-');
     go('dashboard');
+    S.pageLoad = performance.now();
+    renderVer();
+    setTimeout(prefetch, 300);
   } catch (e) {
     $('#main').innerHTML = '<div class="panel"><h2>เริ่มต้นไม่สำเร็จ</h2><p class="error">' + esc(errMsg(e)) + '</p>' +
       '<p>ถ้ายังไม่ได้ติดตั้ง ให้เปิด Google Sheet → เมนู <b>💰 แอปการเงิน → 1) ติดตั้ง</b> แล้วโหลดหน้านี้ใหม่</p></div>';
