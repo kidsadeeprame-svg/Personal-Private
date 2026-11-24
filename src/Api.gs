@@ -110,7 +110,8 @@ function apiBootstrap_() {
     planItems: planItems_().map(i => ({ Type: i.Type, Category: i.Category, Name: i.Name })),
     usdRate: usdRate_(),
     interestCategory: INTEREST_CATEGORY,
-    codeVersion: (PropertiesService.getScriptProperties().getProperty('CODE_SHA') || '').slice(0, 7),
+    codeVersion: (PropertiesService.getScriptProperties().getProperty('CODE_SHA') || '').slice(0, 7), // โค้ดล่าสุดในโปรเจกต์
+    runningVersion: CODE_VERSION,                                                                       // โค้ดที่หน้าเว็บนี้รันอยู่
     cycleMonth: cycleMonth_(new Date()),
     cycleStart: cycleStart_(),
     goals: [GOAL_EMERGENCY, GOAL_RETIREMENT, GOAL_OTHER],

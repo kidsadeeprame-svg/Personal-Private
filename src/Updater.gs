@@ -118,7 +118,10 @@ function updateFromGitHub(force) {
     else if (/\.gs$/.test(file)) { type = 'SERVER_JS'; name = file.replace(/\.gs$/, ''); }
     else if (/\.html$/.test(file)) { type = 'HTML'; name = file.replace(/\.html$/, ''); }
     else return;
-    files.push({ name, type, source: ghRaw_(sha, UPDATE_DIR + '/' + file) });
+    let source = ghRaw_(sha, UPDATE_DIR + '/' + file);
+    // ฝังเลขเวอร์ชันลงในโค้ด เพื่อให้หน้าเว็บรู้ว่ากำลังรันโค้ดชุดไหน
+    if (name === 'Config') source = source.replace(/const CODE_VERSION = '[^']*';/, "const CODE_VERSION = '" + sha.slice(0, 7) + "';");
+    files.push({ name, type, source });
   });
   ['appsscript', 'Api', 'Config', 'Updater', 'Index'].forEach(n => {
     if (!files.some(f => f.name === n)) throw new Error('ไฟล์ใน GitHub ไม่ครบ (ไม่พบ ' + n + ') ยกเลิกการอัปเดต');

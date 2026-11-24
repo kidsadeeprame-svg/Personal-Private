@@ -64,7 +64,9 @@ function showTiming(name, totalMs, serverMs) {
 function renderVer() {
   const el = $('#ver');
   if (!el) return;
-  el.innerHTML = 'เวอร์ชัน ' + esc((S.boot && S.boot.codeVersion) || '-') +
+  const b = S.boot || {};
+  const running = b.runningVersion && b.runningVersion !== 'dev' ? b.runningVersion : (b.codeVersion || '-');
+  el.innerHTML = 'เวอร์ชัน ' + esc(running) +
     (S.pageLoad ? '<br>เปิดเว็บ ' + (S.pageLoad / 1000).toFixed(1) + 's' : '') +
     (S.timing ? '<br>' + esc(S.timing) : '');
 }
@@ -1636,6 +1638,18 @@ async function instHtml() {
   };
 }
 
+/** เตือนเมื่อหน้าเว็บนี้รันโค้ดเก่ากว่าโค้ดในโปรเจกต์ (เช่น เปิดลิงก์ /exec ที่ยังไม่ได้ Deploy เวอร์ชันใหม่) */
+function staleVersionWarning() {
+  const b = S.boot;
+  if (!b || !b.runningVersion || b.runningVersion === 'dev' || !b.codeVersion || b.runningVersion === b.codeVersion) return;
+  const bar = document.createElement('div');
+  bar.className = 'stale-bar';
+  bar.innerHTML = '⚠️ หน้านี้ใช้โค้ดเวอร์ชันเก่า <b>' + esc(b.runningVersion) + '</b> แต่โค้ดล่าสุดในโปรเจกต์คือ <b>' + esc(b.codeVersion) + '</b> — ' +
+    'ลิงก์นี้ผูกกับการ Deploy ครั้งก่อน · ใช้ลิงก์จาก <b>การทำให้ใช้งานได้ → ทดสอบการทำให้ใช้งานได้</b> (ลงท้าย <code>/dev</code>) ' +
+    'หรือ <b>จัดการการทำให้ใช้งานได้ → ✏️ → เวอร์ชันใหม่</b>';
+  document.body.prepend(bar);
+}
+
 /** โหลดข้อมูลหน้าอื่นล่วงหน้า (ทำพร้อมกันเบื้องหลัง) เพื่อให้กดเปลี่ยนหน้าแล้วแสดงทันที */
 function prefetch() {
   const y = thisYear(), m = thisMonth();
@@ -1653,6 +1667,7 @@ function prefetch() {
     S.boot = first.boot;
     API_CACHE['dashboard' + JSON.stringify([first.dashboard.month])] = { t: Date.now(), v: JSON.stringify(first.dashboard) };
     go('dashboard');
+    staleVersionWarning();
     S.pageLoad = performance.now();
     renderVer();
     setTimeout(prefetch, 300);
