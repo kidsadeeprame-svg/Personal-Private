@@ -171,7 +171,7 @@ function apiDeleteTransaction_(id) {
 }
 
 function emptyAgg_() {
-  return { income: 0, expense: 0, saving: 0, deposit: 0, withdraw: 0, interest: 0, byCat: {}, byItem: {} };
+  return { income: 0, expense: 0, saving: 0, deposit: 0, withdraw: 0, interest: 0, byCat: {}, byItem: {}, itemName: {} };
 }
 
 /** รวมยอดรายเดือน: รายรับ (รวมดอกเบี้ยเงินให้ยืม), รายจ่าย, เงินออม */
@@ -185,7 +185,11 @@ function aggregateByMonth_() {
     if (t.Type === INCOME) a.income += amt; else a.expense += amt;
     const k = t.Type + '|' + t.Category;
     a.byCat[k] = (a.byCat[k] || 0) + amt;
-    if (t.Item) { const ki = k + '|' + t.Item; a.byItem[ki] = (a.byItem[ki] || 0) + amt; }
+    if (normItem_(t.Item)) {
+      const ki = k + '|' + normItem_(t.Item);
+      a.byItem[ki] = (a.byItem[ki] || 0) + amt;
+      a.itemName[ki] = String(t.Item).trim();
+    }
   });
   readTable_('contributions').forEach(c => {
     const m = cycleMonth_(c.Date);
@@ -837,6 +841,16 @@ function apiDashboard_(month) {
     .map(l => ({ LoanID: l.LoanID, Borrower: l.Borrower, remaining: l.remaining, DueDate: l.DueDate, status: l.status, monthlyInterest: l.monthlyInterest }));
 
   const recurringPending = apiRecurring_(month).filter(r => r.Active && !r.Posted);
+
+  // รายการที่ต้องจ่ายตามแผนรอบนี้ (ระดับรายการย่อยถ้ามี) พร้อมยอดที่จ่ายแล้ว
+  const checklist = [];
+  apiPlanVsActual_(month).rows.filter(r => r.type === EXPENSE).forEach(r => {
+    const subs = (r.items || []).filter(i => !i.unassigned && i.plan > 0);
+    if (subs.length) subs.forEach(i => checklist.push({ category: r.category, item: i.item, plan: i.plan, paid: i.actual }));
+    else if (r.plan > 0) checklist.push({ category: r.category, item: '', plan: r.plan, paid: r.actual });
+  });
+  checklist.forEach(c => { c.remaining = round2_(Math.max(0, c.plan - c.paid)); });
+  checklist.sort((a, b) => (b.remaining > 0) - (a.remaining > 0) || b.remaining - a.remaining);
   const installmentsPending = apiInstallments_(month).filter(i => i.dueThisMonth)
     .map(i => ({ ID: i.ID, Name: i.Name, Category: i.Category, Amount: Math.min(i.Monthly, i.remaining || i.Monthly), Type: EXPENSE, paid: i.paidCount, months: i.Months }));
 
@@ -856,6 +870,6 @@ function apiDashboard_(month) {
     },
     budgets, expenseByCat, trend, goals,
     loans: { total: round2_(openLoans.reduce((s, l) => s + l.remaining, 0)), list: openLoans },
-    recurringPending, installmentsPending, planNow, planAlerts, refill: refillStatus_(),
+    recurringPending, installmentsPending, planNow, planAlerts, refill: refillStatus_(), checklist,
   };
 }

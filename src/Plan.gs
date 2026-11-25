@@ -391,7 +391,7 @@ function apiPlanVsActual_(period) {
   // รายการย่อย: แผนจากแถวย่อยในแผน, จริงจากรายการที่เลือกรายการย่อยไว้
   const items = {};
   plan.rows.filter(r => r.sub && r.item).forEach(r => {
-    const k = key(r.type, r.category) + '|' + r.item;
+    const k = key(r.type, r.category) + '|' + normItem_(r.item);
     items[k] = items[k] || { item: r.item, plan: 0, actual: 0 };
     items[k].plan += r.cells.reduce((a, c) => a + c.v, 0);
   });
@@ -399,7 +399,7 @@ function apiPlanVsActual_(period) {
     const a = agg[m];
     if (!a) return;
     Object.keys(a.byItem).forEach(k => {
-      items[k] = items[k] || { item: k.split('|')[2], plan: 0, actual: 0 };
+      items[k] = items[k] || { item: a.itemName[k] || k.split('|')[2], plan: 0, actual: 0 };
       items[k].actual += a.byItem[k];
     });
   });

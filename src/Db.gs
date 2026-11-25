@@ -128,6 +128,11 @@ function num_(v) {
 }
 
 /** ช่องว่าง = '' (ใช้กับค่าที่ "ไม่กรอก" ต่างจาก 0) */
+/** ชื่อรายการย่อยแบบปกติ (ตัดเว้นวรรคทั้งหมด ไม่สนตัวพิมพ์) ใช้จับคู่แผนกับรายการจริง */
+function normItem_(s) {
+  return String(s || '').replace(/\s+/g, '').toLowerCase();
+}
+
 function optNum_(v) {
   if (v === null || v === undefined || v === '' || v === '-') return '';
   const n = num_(v);
