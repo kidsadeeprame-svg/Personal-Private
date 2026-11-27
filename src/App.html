@@ -1541,8 +1541,9 @@ async function planMonthHtml() {
   const S_open = S.planOpen = S.planOpen || {};
   const cellHtml = (r, c, j) => c.readonly
     ? '<span class="pl-ro' + (r.hasItems ? ' pl-sum' : ' muted') + '" data-r="' + r.idx + '" data-c="' + j + '">' + (c.v ? fmt(c.v, 0) : '-') + '</span>'
-    : '<input class="pl-cell' + (c.own ? ' own' : '') + '" data-r="' + r.idx + '" data-c="' + j + '" value="' + (c.v ? Math.round(c.v * 100) / 100 : '') + '" placeholder="' + (c.def ? fmt(c.def, 0) : '0') + '" title="' +
-      (c.own ? 'แก้เอง' + (c.src === 'import' ? ' (นำเข้าจาก Expen Life)' : '') + ' · ค่าตั้งต้น ' + fmt(c.def) + ' · ลบตัวเลขเพื่อกลับไปใช้ค่าตั้งต้น' : 'ค่าตั้งต้น') + '">';
+    : '<span class="pl-wrap"><input class="pl-cell' + (c.own ? ' own' : '') + (c.own && !c.v && c.def ? ' zero' : '') + '" data-r="' + r.idx + '" data-c="' + j + '" value="' + (c.v || c.own ? Math.round(c.v * 100) / 100 : '') + '" placeholder="0" title="' +
+      (c.own ? 'แก้เอง' + (c.src === 'import' ? ' (นำเข้าจาก Expen Life)' : '') + ' · ค่าตั้งต้น ' + fmt(c.def) + ' · กด ↺ เพื่อกลับไปใช้ค่าตั้งต้น' : 'ค่าตั้งต้น · ลบตัวเลข/ใส่ 0 = เดือนนี้ไม่มีรายการนี้') + '">' +
+      '<a class="pl-undo" data-r="' + r.idx + '" data-c="' + j + '" title="กลับไปใช้ค่าตั้งต้น ' + fmt(c.def, 0) + '">↺</a></span>';
   const rowHtml = (r, extraCls, name) => '<tr class="' + (extraCls || '') + '"><td class="pl-name">' + name + '</td>' +
     r.cells.map((c, j) => '<td class="num">' + cellHtml(r, c, j) + '</td>').join('') + '<td class="num pl-rowsum" data-r="' + r.idx + '"></td></tr>';
   const section = (title, type, cls) => {
@@ -1616,17 +1617,20 @@ async function planMonthHtml() {
       $$('.pl-cell').forEach(inp => {
         inp.addEventListener('focus', () => inp.select());
         inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
-        inp.addEventListener('change', async () => {
+        // ลบตัวเลข = 0 (เดือนนี้ไม่มีรายการนี้) · กลับไปใช้ค่าตั้งต้นด้วยปุ่ม ↺
+        const setCell = async reset => {
           const r = S.planData.rows[+inp.dataset.r], c = r.cells[+inp.dataset.c];
-          const raw = inp.value.trim();
-          const clear = raw === '';
-          c.own = !clear; c.v = clear ? c.def : num(raw);
-          if (clear) { c.src = ''; inp.value = c.def ? c.def : ''; }
+          const v = reset ? c.def : num(inp.value.trim() || 0);
+          c.own = !reset; c.v = v; if (reset) c.src = '';
+          inp.value = reset ? (c.def || '') : v;
           inp.classList.toggle('own', c.own);
+          inp.classList.toggle('zero', c.own && !v && !!c.def);
           planRecalc();
-          try { await api('savePlanCell', S.planData.months[+inp.dataset.c], r.type, r.category, clear ? '' : num(raw), r.item || ''); }
+          try { await api('savePlanCell', S.planData.months[+inp.dataset.c], r.type, r.category, reset ? '' : v, r.item || ''); }
           catch (e) { toast(errMsg(e), true); }
-        });
+        };
+        inp.addEventListener('change', () => setCell(false));
+        inp.parentNode.querySelector('.pl-undo').addEventListener('click', () => setCell(true));
       });
       planRecalc();
     },
