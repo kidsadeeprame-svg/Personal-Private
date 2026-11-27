@@ -116,7 +116,11 @@ function apiBootstrap_() {
     runningVersion: CODE_VERSION,                                                                       // โค้ดที่หน้าเว็บนี้รันอยู่
     cycleMonth: cycleMonth_(new Date()),
     cycleStart: cycleStart_(),
-    goals: [GOAL_EMERGENCY, GOAL_RETIREMENT, GOAL_OTHER],
+    goals: (() => {
+      const n = goals_().map(g => g.Name);
+      readTable_('funds').forEach(x => { if (x.Goal && n.indexOf(String(x.Goal)) < 0) n.push(String(x.Goal)); });
+      return n.length ? n : [GOAL_EMERGENCY, GOAL_RETIREMENT, GOAL_OTHER];
+    })(),
   };
 }
 
@@ -415,13 +419,68 @@ function fundsValuation_() {
   });
 }
 
+/** เป้าหมายการออมที่ใช้งาน */
+function goals_() {
+  const rows = readTable_('goals').filter(g => isActive_(g.Active) && String(g.Name).trim());
+  return rows.map(g => ({ Name: String(g.Name).trim(), Target: num_(g.Target), TargetDate: monthStr_(g.TargetDate) || String(g.TargetDate || '').slice(0, 7) }));
+}
+
+/** ความคืบหน้าแต่ละเป้าหมาย + ต้องออมเดือนละเท่าไรถึงจะทันวันที่ตั้งไว้ */
+function goalsStatus_(funds) {
+  funds = funds || fundsValuation_();
+  const now = cycleMonth_(new Date());
+  const list = goals_();
+  const names = list.map(g => g.Name);
+  funds.forEach(f => { if (f.Goal && names.indexOf(String(f.Goal)) < 0) { names.push(String(f.Goal)); list.push({ Name: String(f.Goal), Target: 0, TargetDate: '' }); } });
+  return list.map(g => {
+    const value = round2_(funds.filter(f => String(f.Goal) === g.Name).reduce((s, f) => s + f.valueTHB, 0));
+    let monthsLeft = 0, monthlyNeeded = 0;
+    if (g.TargetDate && g.Target) {
+      for (let m = now; m <= g.TargetDate && monthsLeft < 600; m = addMonths_(m, 1)) monthsLeft++;
+      monthlyNeeded = monthsLeft ? round2_(Math.max(0, g.Target - value) / monthsLeft) : round2_(Math.max(0, g.Target - value));
+    }
+    return { goal: g.Name, target: g.Target, value: value, date: g.TargetDate, monthsLeft: monthsLeft, monthlyNeeded: monthlyNeeded };
+  }).filter(g => g.target || g.value);
+}
+
+/** แผนออมของรอบ: ยอดจากแผนรายเดือน เทียบกับที่ลงเงินจริง (แยกรายกองถ้าแบ่งแผนออมเป็นรายการย่อยชื่อเดียวกับกอง) */
+function savingsPlan_(month) {
+  month = month || cycleMonth_(new Date());
+  const plan = buildPlan_([month]);
+  const rows = plan.rows.filter(r => r.type === PLAN_SAVING_TYPE);
+  const parent = rows.find(r => !r.sub);
+  const subs = rows.filter(r => r.sub);
+  const funds = readTable_('funds').map(f => String(f.Name));
+  const done = {};
+  let doneTotal = 0, withdrawn = 0;
+  readTable_('contributions').forEach(c => {
+    if (cycleMonth_(c.Date) !== month) return;
+    const src = String(c.Source);
+    if (src === 'opening' || src === 'transfer') return;
+    const cash = contribCash_(c);
+    if (cash > 0) { done[String(c.Fund)] = (done[String(c.Fund)] || 0) + cash; doneTotal += cash; } else withdrawn += -cash;
+  });
+  const items = [];
+  const used = {};
+  subs.forEach(r => {
+    const fund = funds.find(n => normItem_(n) === normItem_(r.item)) || '';
+    if (fund) used[fund] = true;
+    items.push({ name: r.item, fund: fund, plan: round2_(r.cells[0].v), done: round2_(fund ? done[fund] || 0 : 0) });
+  });
+  Object.keys(done).forEach(n => { if (!used[n]) items.push({ name: n, fund: n, plan: 0, done: round2_(done[n]) }); });
+  items.forEach(i => { i.remaining = round2_(Math.max(0, i.plan - i.done)); });
+  const total = parent ? round2_(parent.cells[0].v) : 0;
+  return { month: month, plan: total, done: round2_(doneTotal), withdrawn: round2_(withdrawn), remaining: round2_(Math.max(0, total - doneTotal)), items: items, split: subs.length > 0 };
+}
+
 function apiInvest_() {
   const cfg = getConfig_();
   syncTickers_(readTable_('funds').filter(x => fundKind_(x) === KIND_STOCK).map(x => x.Ticker));
   return {
     usdRate: usdRate_(),
     funds: fundsValuation_(),
-    targets: { [GOAL_EMERGENCY]: num_(cfg.TARGET_EMERGENCY), [GOAL_RETIREMENT]: num_(cfg.TARGET_RETIREMENT) },
+    goals: goalsStatus_(),
+    savingsPlan: savingsPlan_(),
     contributions: readTable_('contributions').map(c => ({
       ID: String(c.ID), BatchID: String(c.BatchID), Date: fmtDate_(c.Date), Fund: String(c.Fund), Currency: c.Currency,
       AmountFX: num_(c.AmountFX), Rate: num_(c.Rate), AmountTHB: num_(c.AmountTHB), Account: String(c.Account || ''),
@@ -476,14 +535,14 @@ function apiSaveContribution_(b) {
       Account: b.account || '', Note: b.note || '', Source: b.sourceFund ? 'transfer' : 'manual', Units: units, CreatedAt: createdAt,
     };
   });
-  if (b.sourceFund) rows.push(transferOut_(b.sourceFund, rows.reduce((s, r) => s + num_(r.AmountTHB), 0), batch, date, b.note, createdAt, lines.map(l => l.fund)));
+  if (b.sourceFund) rows.push(transferOut_(b.sourceFund, rows.reduce((s, r) => s + num_(r.AmountTHB), 0), batch, date, b.note, createdAt, lines.map(l => l.fund), b.sourceNav));
   appendRows_('contributions', rows);
   navUpdates.forEach(u => updateById_('funds', 'Name', u.name, { NAV: u.nav, NavDate: date }));
   return rows.length;
 }
 
 /** ดึงเงินออกจากกองต้นทางเพื่อย้ายไปกองอื่น (ไม่นับเป็นการดึงเงินมาใช้ และไม่นับเป็นเงินออมใหม่) */
-function transferOut_(srcName, thb, batch, date, note, createdAt, destNames) {
+function transferOut_(srcName, thb, batch, date, note, createdAt, destNames, navOverride) {
   if (destNames.indexOf(srcName) >= 0) throw new Error('กองต้นทางกับกองที่ลงเงินต้องไม่ใช่กองเดียวกัน');
   const f = readTable_('funds').find(x => String(x.Name) === String(srcName));
   if (!f) throw new Error('ไม่พบกอง ' + srcName);
@@ -493,7 +552,7 @@ function transferOut_(srcName, thb, batch, date, note, createdAt, destNames) {
   const costOut = round2_(v.cost * (v.valueTHB ? thb / v.valueTHB : 1));
   let amountFX = -thb, units = '', rate = 1, cur = 'THB';
   if (kind === KIND_USD) { cur = 'USD'; rate = usdRate_(); amountFX = -round2_(thb / rate); }
-  else if (isUnitKind_(kind)) { units = -Math.round(thb / v.nav * 10000) / 10000; amountFX = -costOut; }
+  else if (isUnitKind_(kind)) { units = -Math.round(thb / (num_(navOverride) || v.nav) * 10000) / 10000; amountFX = -costOut; }
   return {
     ID: newId_('C'), BatchID: batch, Date: date, Fund: String(f.Name), Currency: cur, AmountFX: amountFX, Rate: rate,
     AmountTHB: -costOut, Account: '', Note: note || ('ย้ายไป ' + destNames.join(', ')), Source: 'transfer', Units: units, Cash: -thb, CreatedAt: createdAt,
@@ -872,8 +931,8 @@ function apiDeleteVisit_(id) {
 
 /* ============ ตั้งค่า ============ */
 
-const EDITABLE_TABLES_ = ['categories', 'accounts', 'funds', 'healthItems', 'taxBrackets', 'config'];
-const HIDDEN_CONFIG_ = ['USD_THB', 'DRIVE_FOLDER_ID', 'IMPORT_DONE', 'PLAN_IMPORT_DONE', 'SCHEMA_VERSION'];
+const EDITABLE_TABLES_ = ['categories', 'accounts', 'funds', 'goals', 'healthItems', 'taxBrackets', 'config'];
+const HIDDEN_CONFIG_ = ['USD_THB', 'DRIVE_FOLDER_ID', 'IMPORT_DONE', 'PLAN_IMPORT_DONE', 'SCHEMA_VERSION', 'TARGET_EMERGENCY', 'TARGET_RETIREMENT'];
 
 function apiGetTable_(key) {
   if (EDITABLE_TABLES_.indexOf(key) < 0) throw new Error('แก้ไขตารางนี้ไม่ได้');
@@ -957,14 +1016,7 @@ function apiDashboard_(month) {
     trend.push({ month: m, income: round2_(a.income), expense: round2_(a.expense), saving: round2_(a.saving), remaining: round2_(a.income - a.expense - a.saving) });
   }
 
-  const funds = fundsValuation_();
-  const goalValue = g => round2_(funds.filter(f => f.Goal === g).reduce((s, f) => s + f.valueTHB, 0));
-  const goals = [
-    { goal: GOAL_EMERGENCY, target: num_(cfg.TARGET_EMERGENCY), value: goalValue(GOAL_EMERGENCY) },
-    { goal: GOAL_RETIREMENT, target: num_(cfg.TARGET_RETIREMENT), value: goalValue(GOAL_RETIREMENT) },
-  ];
-  const otherValue = goalValue(GOAL_OTHER);
-  if (otherValue) goals.push({ goal: GOAL_OTHER, target: 0, value: otherValue });
+  const goals = goalsStatus_();
 
   const openLoans = loansComputed_().filter(l => l.status !== LOAN_CLOSED)
     .sort((a, b) => (a.DueDate || '9999').localeCompare(b.DueDate || '9999'))

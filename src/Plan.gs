@@ -21,7 +21,7 @@ function planSettings_() {
     birthYear: num_(c.BIRTH_YEAR),
     retireAge: num_(c.RETIRE_AGE) || 60,
     savingPct: num_(c.SAVING_RATE_TARGET) || 20,
-    target: num_(c.TARGET_RETIREMENT),
+    target: (goals_().find(g => g.Name === GOAL_RETIREMENT) || {}).Target || num_(c.TARGET_RETIREMENT),
   };
 }
 

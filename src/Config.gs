@@ -14,7 +14,7 @@ const SPREADSHEET_ID = '';
 const TZ = 'Asia/Bangkok';
 
 // เพิ่มเลขนี้เมื่อเปลี่ยนโครงสร้างแท็บ เพื่อให้หัวคอลัมน์ถูกอัปเดตอัตโนมัติ
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 const INCOME = 'รายรับ';
 const EXPENSE = 'รายจ่าย';
@@ -66,6 +66,7 @@ const SHEETS = {
   healthVisits:  { name: 'App_HealthVisits',  headers: ['VisitID', 'Date', 'Hospital', 'FileUrl', 'Note'] },
   healthResults: { name: 'App_HealthResults', headers: ['VisitID', 'Item', 'Value'] },
   plan:          { name: 'App_Plan',          headers: ['Month', 'Type', 'Category', 'Amount', 'Source', 'Item'], text: ['Month'] },
+  goals:         { name: 'App_Goals',         headers: ['Name', 'Target', 'TargetDate', 'Active'], text: ['TargetDate'] },
   prices:        { name: 'App_Prices',        headers: ['Ticker', 'Price', 'Currency'] },
   planItems:     { name: 'App_PlanItems',     headers: ['ID', 'Type', 'Category', 'Name', 'DefaultAmount', 'Order', 'Active'] },
   installments:  { name: 'App_Installments',  headers: ['ID', 'Name', 'Total', 'Months', 'StartMonth', 'Monthly', 'Category', 'Account', 'DayOfMonth', 'Note'], text: ['StartMonth'] },

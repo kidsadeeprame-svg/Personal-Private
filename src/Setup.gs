@@ -20,6 +20,7 @@ function setup() {
   const created = ensureSheets_();
   invalidate_();
   const seeded = seedDefaults_();
+  seedGoals_();
   PropertiesService.getScriptProperties().deleteProperty('READY_SCHEMA');
   const msg = 'ติดตั้งเสร็จ\n' +
     (created.length ? 'สร้างแท็บใหม่: ' + created.join(', ') + '\n' : 'แท็บครบอยู่แล้ว\n') +
@@ -141,11 +142,24 @@ function SHEETS_SIGNATURE_() {
   return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, txt)).slice(0, 12);
 }
 
+/** เป้าหมายเริ่มต้น (ย้ายจากค่าตั้งค่าเดิม) */
+function seedGoals_() {
+  if (readTable_('goals').length) return false;
+  const c = getConfig_();
+  appendRows_('goals', [
+    { Name: GOAL_EMERGENCY, Target: num_(c.TARGET_EMERGENCY), TargetDate: '', Active: true },
+    { Name: GOAL_RETIREMENT, Target: num_(c.TARGET_RETIREMENT), TargetDate: '', Active: true },
+    { Name: GOAL_OTHER, Target: '', TargetDate: '', Active: true },
+  ]);
+  return true;
+}
+
 function ensureReadyFull_() {
   const ss = ss_();
   const missing = Object.keys(SHEETS).some(k => !ss.getSheetByName(SHEETS[k].name));
   if (missing) ensureSheets_();
   if (!ss.getSheetByName(SHEETS.config.name)) return;
+  seedGoals_();
   const rows = readTable_('config');
   const have = rows.map(r => r.Key);
   const add = DEFAULTS.config.filter(r => have.indexOf(r.Key) < 0);

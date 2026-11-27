@@ -371,9 +371,30 @@ function budgetsHtml(list) {
 function goalsHtml(goals) {
   return goals.map(g => {
     const pct = g.target ? g.value / g.target * 100 : 0;
+    const need = g.date && g.target ? (g.value >= g.target ? '<span class="income">ถึงเป้าแล้ว 🎉</span>' :
+      'ต้องออมเดือนละ <b>' + money(g.monthlyNeeded) + '</b> ถึง ' + monthLabel(g.date) + ' (' + g.monthsLeft + ' เดือน)') : '';
     return '<div class="budget-row"><div class="top"><span>' + esc(g.goal) + '</span><span class="small muted">' + money(g.value) +
-      (g.target ? ' / ' + money(g.target) + ' · ' + fmt(pct, 1) + '%' : '') + '</span></div>' + (g.target ? barHtml(pct, pct >= 100 ? 'ok' : '') : '') + '</div>';
-  }).join('') || '<div class="empty">ยังไม่มีข้อมูล</div>';
+      (g.target ? ' / ' + money(g.target) + ' · ' + fmt(pct, 1) + '%' : '') + '</span></div>' + (g.target ? barHtml(pct, pct >= 100 ? 'ok' : '') : '') +
+      (need ? '<div class="small muted" style="margin-top:3px">' + need + '</div>' : '') + '</div>';
+  }).join('') || '<div class="empty">ยังไม่มีเป้าหมาย — ตั้งได้ที่ ตั้งค่า → เป้าหมายการออม</div>';
+}
+
+/** แผนออมรอบนี้ (จากแผนรายเดือน) เทียบกับที่ลงเงินจริง */
+function savingsPlanHtml(sp) {
+  if (!sp) return '';
+  const pct = sp.plan ? sp.done / sp.plan * 100 : 0;
+  let html = '<div class="panel" style="margin-bottom:16px"><h2>แผนออมรอบ ' + monthLabel(sp.month) + '<span class="spacer"></span><a class="small" data-go="plan">แก้แผน →</a></h2>' +
+    '<div class="grid cards" style="margin-bottom:10px">' + cardHtml('ต้องออมตามแผน', money(sp.plan), 'saving') + cardHtml('ลงเงินแล้ว', money(sp.done), 'income', sp.withdrawn ? 'ดึงออกมาใช้ ' + money(sp.withdrawn) : '') +
+    cardHtml('ยังต้องออมอีก', money(sp.remaining), sp.remaining > 0 ? 'expense' : 'income', sp.remaining > 0 ? '' : 'ครบตามแผนแล้ว') + '</div>' + barHtml(pct, pct >= 100 ? 'ok' : '');
+  if (sp.items.length) {
+    html += '<table class="data" style="margin-top:10px"><thead><tr><th>รายการ</th><th class="num">แผน</th><th class="num">ลงแล้ว</th><th class="num">เหลือ</th><th></th></tr></thead><tbody>' +
+      sp.items.map((i, k) => '<tr><td>' + esc(i.name) + (i.fund ? '' : ' <span class="badge warn" title="ตั้งชื่อรายการย่อยให้ตรงกับชื่อกอง เพื่อจับคู่">ไม่ตรงกับกอง</span>') + '</td><td class="num">' + fmt(i.plan, 0) +
+        '</td><td class="num">' + fmt(i.done, 0) + '</td><td class="num">' + (i.remaining ? fmt(i.remaining, 0) : '<span class="badge ok">ครบ</span>') + '</td><td>' +
+        (i.fund && i.remaining ? '<button class="btn sm primary" data-save-fund="' + k + '">ออม</button>' : '') + '</td></tr>').join('') + '</tbody></table>';
+  } else {
+    html += '<p class="muted small" style="margin-bottom:0">อยากรู้ว่าแต่ละกองต้องลงเท่าไร: ไปที่ แผน/คาดการณ์ → ▸ เงินออม/ลงทุน → เพิ่มรายการย่อย <b>ชื่อเดียวกับกอง</b> (เช่น DIME-JEPQ) แล้วใส่ยอดต่อเดือน</p>';
+  }
+  return html + '</div>';
 }
 function loanBadge(status) {
   const cls = status === 'เกินกำหนด' ? 'bad' : status === 'ปิดยอด' ? 'ok' : 'warn';
@@ -636,20 +657,23 @@ PAGES.invest = async token => {
   S.usdRate = d.usdRate;
   const totalCost = d.funds.reduce((s, f) => s + f.cost, 0);
   const totalValue = d.funds.reduce((s, f) => s + f.valueTHB, 0);
-  const goals = Object.keys(d.targets).map(g => ({ goal: g, target: d.targets[g], value: d.funds.filter(f => f.Goal === g).reduce((s, f) => s + f.valueTHB, 0) }));
+  const goals = d.goals;
 
   S.investFunds = d.funds;
   let html = head('เงินออม / ลงทุน', '<span class="muted small">USD/THB ' + fmt(d.usdRate, 2) + '</span><button class="btn ghost" id="inv-reset">เริ่มต้นใหม่</button><button class="btn" id="inv-withdraw">ดึงเงินออกมาใช้</button><button class="btn" id="inv-div">รับเงินปันผล</button><button class="btn" id="inv-snap">อัปเดตยอด / NAV</button><button class="btn primary" id="inv-add">+ ลงเงิน</button>');
   html += '<div class="grid cards">' + cardHtml('มูลค่ารวม', money(totalValue), 'saving') + cardHtml('เงินต้นที่ลงไป', money(totalCost)) +
     cardHtml('กำไร/ขาดทุน', (totalValue - totalCost >= 0 ? '+' : '') + money(totalValue - totalCost), totalValue - totalCost >= 0 ? 'income' : 'expense', totalCost ? fmt((totalValue - totalCost) / totalCost * 100, 2) + '%' : '') + '</div>';
+  html += savingsPlanHtml(d.savingsPlan);
 
-  html += '<div class="grid three" style="margin-bottom:16px"><div class="panel"><h2>แต่ละกอง</h2><table class="data"><thead><tr><th>กอง</th><th>เป้าหมาย</th><th class="num">เงินต้น</th><th class="num">มูลค่าปัจจุบัน</th><th class="num">กำไร/ขาดทุน</th><th>ยอดล่าสุด</th></tr></thead><tbody>' +
+  html += '<div class="grid three" style="margin-bottom:16px"><div class="panel"><h2>แต่ละกอง</h2><table class="data"><thead><tr><th>กอง</th><th>เป้าหมาย</th><th class="num">เงินต้น</th><th class="num">มูลค่าปัจจุบัน</th><th class="num">กำไร/ขาดทุน</th><th>ยอดล่าสุด</th><th></th></tr></thead><tbody>' +
     d.funds.map(f => '<tr' + (f.Active ? '' : ' class="muted"') + '><td>' + esc(f.Name) + ' <span class="badge">' + esc(f.Kind || f.Currency) + '</span>' +
       (isUnitKind(f.Kind) ? '<div class="small muted">' + (f.ticker ? esc(f.ticker) + ' · ' : '') + fmt(f.units, 4) + ' ' + unitWord(f.Kind) + ' × ' + priceWord(f.Kind) + ' ' + fmt(f.nav, 4) +
         (f.livePrice ? ' <span class="badge ok">ราคาล่าสุด' + (f.priceCurrency === 'USD' ? ' $' + fmt(f.priceFX, 2) : '') + '</span>' : '') + (f.navDate && !f.livePrice ? ' (' + dateLabel(f.navDate) + ')' : '') + '</div>' : '') +
       '</td><td>' + esc(f.Goal) + '</td><td class="num">' + money(f.cost) +
       '</td><td class="num">' + money(f.valueTHB) + (f.Currency === 'USD' ? '<div class="small muted">$' + fmt(f.valueFX, 2) + '</div>' : '') + '</td><td class="num ' + (f.gain >= 0 ? 'income' : 'expense') + '">' + (f.gain >= 0 ? '+' : '') + fmt(f.gain) +
-      (f.cost ? '<div class="small">' + fmt(f.gain / f.cost * 100, 2) + '%</div>' : '') + '</td><td class="small muted">' + (f.lastSnapshot ? monthLabel(f.lastSnapshot) : 'ยังไม่บันทึก') + '</td></tr>').join('') +
+      (f.cost ? '<div class="small">' + fmt(f.gain / f.cost * 100, 2) + '%</div>' : '') + '</td><td class="small muted">' + (f.lastSnapshot ? monthLabel(f.lastSnapshot) : 'ยังไม่บันทึก') + '</td>' +
+      '<td style="white-space:nowrap">' + (f.Active ? '<button class="btn sm" data-buy="' + esc(f.Name) + '">' + (isUnitKind(f.Kind) ? 'ซื้อ' : 'ฝาก') + '</button> ' +
+        (f.valueTHB > 0 ? '<button class="btn sm" data-sell="' + esc(f.Name) + '">' + (isUnitKind(f.Kind) ? 'ขาย' : 'ถอน') + '</button>' : '') : '') + '</td></tr>').join('') +
     '</tbody></table><p class="muted small">มูลค่าปัจจุบัน = ยอดที่บันทึกล่าสุด + เงินที่ลงเพิ่มหลังจากนั้น (กอง USD คิดด้วยอัตราแลกเปลี่ยนปัจจุบัน)</p></div>' +
     '<div class="panel"><h2>ความคืบหน้าเป้าหมาย</h2>' + goalsHtml(goals) + refillHtml(d.refill) + dividendHtml(d.dividends) + '</div></div>';
 
@@ -678,6 +702,13 @@ PAGES.invest = async token => {
   $('#inv-reset').addEventListener('click', () => resetInvestModal(d));
   $('#inv-withdraw').addEventListener('click', () => withdrawModal(d, {}));
   $('#inv-div').addEventListener('click', () => dividendModal(d));
+  $$('[data-buy]').forEach(b => b.addEventListener('click', () => contributionModal(null, { [b.dataset.buy]: '' })));
+  $$('[data-sell]').forEach(b => b.addEventListener('click', () => withdrawModal(d, { fund: b.dataset.sell })));
+  $$('[data-save-fund]').forEach(b => b.addEventListener('click', () => {
+    const i = d.savingsPlan.items[+b.dataset.saveFund];
+    contributionModal(null, { [i.fund]: i.remaining });
+  }));
+  $$('[data-go]').forEach(a => a.addEventListener('click', () => go(a.dataset.go)));
   $('#inv-snap').addEventListener('click', () => snapshotModal(d));
   $$('[data-bedit]').forEach(b => b.addEventListener('click', () => contributionModal(batches[b.dataset.bedit])));
   $$('[data-bdel]').forEach(b => b.addEventListener('click', () => confirmAction('ลบการลงเงินครั้งนี้ทั้งหมด?', async () => {
@@ -707,8 +738,9 @@ const KIND_STOCK_UI = 'หุ้น';
 const isUnitKind = k => k === KIND_FUND_UI || k === KIND_STOCK_UI;
 const unitWord = k => (k === KIND_STOCK_UI ? 'หุ้น' : 'หน่วย');
 const priceWord = k => (k === KIND_STOCK_UI ? 'ราคา' : 'NAV');
-function contributionModal(batch) {
+function contributionModal(batch, prefill) {
   const first = batch ? batch[0] : null;
+  prefill = prefill || {};
   const valFunds = S.investFunds || [];
   const funds = activeFunds();
   const byFund = {};
@@ -717,7 +749,7 @@ function contributionModal(batch) {
   const names = funds.map(f => f.Name).concat(Object.keys(byFund).filter(n => !funds.some(f => f.Name === n)));
   const fundOf = n => valFunds.find(f => f.Name === n) || S.boot.funds.find(f => f.Name === n) || { Name: n, Currency: 'THB' };
   const rows = names.map(n => {
-    const f = fundOf(n), c = byFund[n];
+    const f = fundOf(n), c = byFund[n] || (prefill[n] !== undefined && prefill[n] !== '' ? { AmountTHB: prefill[n] } : null);
     const usd = f.Currency === 'USD', isFund = isUnitKind(f.Kind);
     const nav = c && c.Units ? Math.round(c.AmountTHB / c.Units * 10000) / 10000 : (f.nav || f.NAV || '');
     return '<tr data-fund="' + esc(n) + '" data-kind="' + esc(f.Kind || '') + '"><td>' + esc(n) + ' <span class="badge">' + esc(f.Kind || f.Currency) + '</span></td>' +
@@ -741,6 +773,8 @@ function contributionModal(batch) {
       '<p class="muted small">ใส่เฉพาะกองที่ลงเงินครั้งนี้ ช่องที่ว่างไว้จะไม่ถูกบันทึก · กองทุนรวม/หุ้นใส่ราคาที่ซื้อ ระบบคำนวณจำนวนหน่วยให้ · ' +
       'ถ้าใช้เงินที่เก็บไว้ในกองอื่น (เช่น เงินปันผลสะสม) เลือก "ย้ายจากกอง…" จะไม่ถูกนับเป็นเงินออมซ้ำ</p>',
     onOpen: root => {
+      const pf = Object.keys(prefill)[0];
+      if (pf) { const el = $('tr[data-fund="' + CSS.escape(pf) + '"] .l-thb', root); if (el) setTimeout(() => el.focus(), 50); }
       const recalc = () => {
         let total = 0;
         $$('tr[data-fund]', root).forEach(tr => {
@@ -820,7 +854,7 @@ function withdrawModal(d, pre) {
   const em = funds.filter(f => f.Goal === 'ฉุกเฉิน').sort((a, b) => b.valueTHB - a.valueTHB)[0] || funds[0];
   const sel = pre.fund || em.Name;
   openModal({
-    title: 'ดึงเงินออกมาใช้',
+    title: pre.fund ? 'ขาย / ถอนจาก ' + pre.fund : 'ดึงเงินออกมาใช้',
     body: '<div class="form-grid">' +
       field('ดึงจากกอง', '<select name="fund">' + funds.map(f => '<option value="' + esc(f.Name) + '"' + (f.Name === sel ? ' selected' : '') + '>' + esc(f.Name) + ' (' + money(f.valueTHB) + ')</option>').join('') + '</select>', 'full') +
       field('วันที่', '<input type="date" name="date" value="' + (pre.date || today()) + '">') +
@@ -829,7 +863,9 @@ function withdrawModal(d, pre) {
       field('NAV ที่ขาย', '<input type="number" step="0.0001" name="nav">', 'w-nav') +
       field('โอนเข้าบัญชี', '<select name="account">' + opts(accounts(), '', true) + '</select>') +
       field('ใช้ทำอะไร', '<input name="note" placeholder="เช่น ค่ารักษาพยาบาล, เงินไม่พอเดือนนี้">') +
-      '<label class="full"><input type="checkbox" name="refill" checked> ต้องเติมคืนกองนี้ภายหลัง</label>' +
+      field('เงินที่ได้', '<select name="dest"><option value="">นำออกมาใช้ (หักจากเงินออมของเดือน)</option>' +
+        d.funds.filter(f => f.Active && !isUnitKind(f.Kind)).map(f => '<option value="' + esc(f.Name) + '">เก็บเข้ากอง ' + esc(f.Name) + ' (ย้ายระหว่างกอง)</option>').join('') + '</select>', 'full') +
+      '<label class="full w-refill"><input type="checkbox" name="refill" checked> ต้องเติมคืนกองนี้ภายหลัง</label>' +
       '<div class="full muted small" id="w-info"></div></div>',
     onOpen: root => {
       const sync = () => {
@@ -839,6 +875,10 @@ function withdrawModal(d, pre) {
         const navIn = $('input[name=nav]', root);
         if (isUnitKind(f.Kind) && !navIn.value) navIn.value = f.nav || '';
         const amt = num($('input[name=amountTHB]', root).value);
+        const destSel = $('select[name=dest]', root);
+        Array.from(destSel.options).forEach(o => { o.disabled = o.value === f.Name; });
+        if (destSel.value === f.Name) destSel.value = '';
+        $('.w-refill', root).classList.toggle('hidden', !!destSel.value);
         $('#w-info', root).innerHTML = 'ยอดในกอง ' + money(f.valueTHB) + (amt ? ' → เหลือ ' + money(f.valueTHB - amt) : '') +
           (isUnitKind(f.Kind) && amt && num(navIn.value) ? ' · ขาย ' + fmt(amt / num(navIn.value), 4) + ' ' + unitWord(f.Kind) : '') +
           '<br>ในสรุปเดือนนี้จะหักออกจากเงินออม (ไม่นับเป็นรายรับ)';
@@ -848,6 +888,11 @@ function withdrawModal(d, pre) {
     onSubmit: async form => {
       const f = readForm(form);
       if (!num(f.amountTHB)) throw new Error('กรุณาใส่จำนวนเงิน');
+      if (f.dest) {
+        await api('saveContribution', { date: f.date, account: f.account, note: f.note || ('ขาย/ย้ายจาก ' + f.fund), sourceFund: f.fund, sourceNav: num(f.nav),
+          lines: [{ fund: f.dest, amountTHB: num(f.amountTHB), rate: num(f.rate) || S.usdRate }] });
+        toast('ย้ายเงินเข้ากอง ' + f.dest + ' แล้ว'); refresh(); return;
+      }
       await api('withdraw', { fund: f.fund, date: f.date, amountTHB: num(f.amountTHB), rate: num(f.rate), nav: num(f.nav), account: f.account, note: f.note, refill: f.refill });
       toast('บันทึกการดึงเงินแล้ว'); refresh();
     },
@@ -1318,6 +1363,8 @@ const SETTINGS = [
   { key: 'accounts', title: 'บัญชี / ช่องทางจ่าย', cols: [{ k: 'Name', l: 'ชื่อบัญชี' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
   { key: 'funds', title: 'กองเงินออม / ลงทุน', note: 'เป้าหมาย: ใช้รวมยอดเทียบเป้าฉุกเฉิน/เกษียณ · เปลี่ยนชื่อกองจะทำให้ประวัติเดิมไม่ผูกกับกองนี้',
     cols: [{ k: 'Name', l: 'ชื่อกอง' }, { k: 'Kind', l: 'ประเภท', t: 'select', o: () => S.boot.fundKinds }, { k: 'Ticker', l: 'ชื่อย่อหุ้น' }, { k: 'Currency', l: 'สกุลเงิน', t: 'select', o: () => ['THB', 'USD'] }, { k: 'Goal', l: 'เป้าหมาย', t: 'select', o: () => S.boot.goals }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
+  { key: 'goals', title: 'เป้าหมายการออม', note: 'เพิ่มเป้าหมายได้ตามต้องการ (เช่น ดาวน์บ้าน, เที่ยวญี่ปุ่น) · วันที่ถึงเป้า ใส่เป็น ปี-เดือน ค.ศ. เช่น 2028-12 → ระบบบอกว่าต้องออมเดือนละเท่าไร · ผูกกองกับเป้าหมายได้ที่ตาราง กองเงินออม/ลงทุน ด้านบน',
+    cols: [{ k: 'Name', l: 'ชื่อเป้าหมาย' }, { k: 'Target', l: 'ยอดเป้า (บาท)', t: 'number' }, { k: 'TargetDate', l: 'ถึงเป้าภายใน (ปี-เดือน)' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
   { key: 'healthItems', title: 'รายการตรวจสุขภาพ และเกณฑ์ปกติ', note: 'เว้นว่างค่าต่ำสุด/สูงสุดได้ถ้าไม่มีเกณฑ์ด้านนั้น · ลำดับ ใช้เรียงในตาราง',
     cols: [{ k: 'Name', l: 'ชื่อรายการ' }, { k: 'Unit', l: 'หน่วย' }, { k: 'Min', l: 'ต่ำสุดปกติ', t: 'number' }, { k: 'Max', l: 'สูงสุดปกติ', t: 'number' }, { k: 'Group', l: 'กลุ่ม' }, { k: 'Order', l: 'ลำดับ', t: 'number' }, { k: 'Active', l: 'ใช้งาน', t: 'check' }] },
   { key: 'config', title: 'เป้าหมายและค่าตั้งค่า', cols: [{ k: 'Key', l: 'คีย์', t: 'ro' }, { k: 'Value', l: 'ค่า' }, { k: 'Description', l: 'คำอธิบาย', t: 'ro' }], fixed: true },
