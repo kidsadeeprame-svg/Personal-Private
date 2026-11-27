@@ -137,7 +137,38 @@ table.data tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
 .pl-ro { padding-right: 6px; }
 
 @media (max-width: 720px) {
-  .sidebar { width: 60px; padding: 10px 6px; } .sidebar span { display: none; } .brand { padding: 4px 8px 12px; }
-  main { padding: 16px; } .form-grid { grid-template-columns: 1fr; }
+  /* เมนูเป็นแถบล่างแบบแอป */
+  .layout { display: block; }
+  .sidebar { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; height: auto; z-index: 40; padding: 0 0 env(safe-area-inset-bottom);
+    border-right: 0; border-top: 1px solid var(--line); }
+  .brand, .ver { display: none; }
+  #nav { display: flex; overflow-x: auto; scrollbar-width: none; }
+  #nav::-webkit-scrollbar { display: none; }
+  #nav a { flex: 1 0 auto; min-width: 64px; flex-direction: column; gap: 0; padding: 6px 6px 5px; margin: 0; font-size: 18px; border-radius: 0; text-align: center; }
+  #nav a span { font-size: 10px; line-height: 1.2; white-space: nowrap; }
+  main { padding: 12px 12px 84px; }
+  body { font-size: 14px; }
+  .page-head { margin-bottom: 12px; gap: 8px; }
+  .page-head h1 { font-size: 19px; flex-basis: 100%; }
+  .page-head h1 .small, .page-head h1 small { display: block; }
+  .grid { gap: 10px; }
+  .cards { grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .card { padding: 10px 12px; }
+  .card .value { font-size: 18px; word-break: break-all; }
+  .panel { padding: 12px; overflow-x: auto; }
+  .panel h2 { flex-wrap: wrap; font-size: 14px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .tabs { overflow-x: auto; scrollbar-width: none; }
+  .tabs a { white-space: nowrap; padding: 8px 10px; }
+  table.data th, table.data td { padding: 6px 5px; }
+  .m-hide { display: none; }
+  input, select, textarea { font-size: 16px; } /* กัน iPhone ซูมเวลาแตะช่อง */
+  .pl-cell { width: 72px; font-size: 14px; }
+  .plan-grid .pl-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+  .modal { padding: 12px 8px; }
+  #modal-body { max-height: calc(100vh - 160px); padding: 14px; }
+  .form-grid > * { min-width: 0; }
+  .form-grid input, .form-grid select, .form-grid textarea { max-width: 100%; min-width: 0; }
+  .pi-months { grid-template-columns: repeat(4, 1fr); }
 }
 </style>

@@ -433,11 +433,11 @@ function allocationHtml(d, pn, c) {
     const rem = Math.max(0, plan - done);
     const pct = plan ? done / plan * 100 : 0;
     const status = !plan && done ? '<span class="badge warn">นอกแผน</span>' : rem <= 0 ? (done > plan ? '<span class="expense">เกิน ' + fmt(done - plan, 0) + '</span>' : '<span class="badge ok">ครบ</span>') : fmt(rem, 0);
-    return '<tr' + (rem <= 0 && plan ? ' class="muted"' : '') + '><td>' + label + '</td><td class="num">' + fmt(plan, 0) + '</td><td class="num">' + fmt(done, 0) + '</td><td style="width:140px">' +
+    return '<tr' + (rem <= 0 && plan ? ' class="muted"' : '') + '><td>' + label + '</td><td class="num">' + fmt(plan, 0) + '</td><td class="num">' + fmt(done, 0) + '</td><td class="m-hide" style="width:140px">' +
       barHtml(pct, pct > 100 ? 'bad' : pct >= 100 ? 'ok' : cls || '') + '</td><td class="num">' + status + '</td><td>' + (btn || '') + '</td></tr>';
   };
   const sec = (title, cls, amountPlan, amountDone) => '<tr class="pl-sec"><td colspan="6"><b class="' + cls + '">' + title + '</b> <span class="small muted">แผน ' + money(amountPlan) + ' · จริง ' + money(amountDone) + '</span></td></tr>';
-  let html = '<div class="table-wrap" style="max-height:none"><table class="data"><thead><tr><th>รายการ</th><th class="num">แผน</th><th class="num">จริง</th><th></th><th class="num">เหลือ</th><th></th></tr></thead><tbody>';
+  let html = '<div class="table-wrap" style="max-height:none"><table class="data"><thead><tr><th>รายการ</th><th class="num">แผน</th><th class="num">จริง</th><th class="m-hide"></th><th class="num">เหลือ</th><th></th></tr></thead><tbody>';
   html += sec('รายจ่าย', 'expense', pn.expense, c.expense);
   html += (d.checklist || []).map((x, i) => row(x.item ? esc(x.item) + ' <span class="small muted">' + esc(x.category) + '</span>' : esc(x.category), x.plan, x.paid,
     '<button class="btn sm' + (x.remaining > 0 ? ' primary' : '') + '" data-pay="' + i + '">จ่าย</button>')).join('') ||
