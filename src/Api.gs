@@ -42,6 +42,7 @@ const API_ = {
   resetInvest: apiResetInvest_,
   withdraw: apiWithdraw_,
   quote: apiQuote_,
+  receiveDividend: apiReceiveDividend_,
   loans: apiLoans_,
   saveLoan: apiSaveLoan_,
   deleteLoan: apiDeleteLoan_,
@@ -73,7 +74,7 @@ const API_ = {
 };
 
 const WRITE_APIS_ = ['saveTransaction', 'deleteTransaction', 'saveRecurring', 'deleteRecurring', 'postRecurring',
-  'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'resetInvest', 'withdraw', 'saveLoan', 'deleteLoan',
+  'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'resetInvest', 'withdraw', 'receiveDividend', 'saveLoan', 'deleteLoan',
   'savePayment', 'deletePayment', 'saveTax', 'saveVisit', 'deleteVisit', 'saveTable',
   'savePlanCell', 'resetPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments',
   'savePlanItem', 'deletePlanItem'];
@@ -103,7 +104,7 @@ function apiBootstrap_() {
     title: APP_TITLE,
     today: fmtDate_(new Date()),
     config: getConfig_(),
-    categories: readTable_('categories').map(c => ({ Type: c.Type, Name: String(c.Name), MonthlyBudget: optNum_(c.MonthlyBudget), Active: isActive_(c.Active) })),
+    categories: readTable_('categories').map(c => ({ Type: c.Type, Name: String(c.Name), MonthlyBudget: optNum_(c.MonthlyBudget), Active: isActive_(c.Active), NoTax: isTrue_(c.NoTax) })),
     accounts: readTable_('accounts').map(a => ({ Name: String(a.Name), Active: isActive_(a.Active) })),
     funds: readTable_('funds').map(f => ({ Name: String(f.Name), Currency: f.Currency || 'THB', Goal: f.Goal, Active: isActive_(f.Active), Kind: fundKind_(f), NAV: num_(f.NAV), Ticker: cleanTicker_(f.Ticker) })),
     fundKinds: FUND_KINDS,
@@ -194,7 +195,7 @@ function aggregateByMonth_() {
   });
   readTable_('contributions').forEach(c => {
     const m = cycleMonth_(c.Date);
-    if (!m || String(c.Source) === 'opening') return; // ยอดตั้งต้นไม่ใช่เงินออมใหม่ของเดือนนั้น
+    if (!m || String(c.Source) === 'opening' || String(c.Source) === 'transfer') return; // ยอดตั้งต้น/ย้ายระหว่างกอง ไม่ใช่เงินออมใหม่
     const a = get(m), cash = contribCash_(c);
     a.saving += cash;                       // เงินออมสุทธิ = ลงเงิน − ดึงออก
     if (cash >= 0) a.deposit += cash; else a.withdraw += -cash;
@@ -428,6 +429,7 @@ function apiInvest_() {
       Cash: contribCash_(c), Refill: isTrue_(c.Refill),
     })).sort((a, b) => b.Date.localeCompare(a.Date)),
     refill: refillStatus_(),
+    dividends: dividendSummary_(),
     kinds: FUND_KINDS,
     snapshots: readTable_('snapshots').map(s => ({
       ID: String(s.ID), Month: monthStr_(s.Month), Fund: String(s.Fund), Currency: s.Currency,
@@ -446,7 +448,7 @@ function apiSaveContribution_(b) {
   let createdAt = new Date();
   if (b.BatchID) {
     const old = readTable_('contributions').filter(r => String(r.BatchID) === String(b.BatchID));
-    if (old.some(r => String(r.Source) === 'withdraw')) throw new Error('รายการดึงเงินแก้ไขไม่ได้ ให้ลบแล้วบันทึกใหม่');
+    if (old.some(r => String(r.Source) === 'withdraw' || String(r.Source) === 'transfer')) throw new Error('รายการดึงเงิน/ย้ายเงินแก้ไขไม่ได้ ให้ลบแล้วบันทึกใหม่');
     const firstOld = old.map(r => r.CreatedAt).filter(d => d instanceof Date).sort((x, y) => x - y)[0];
     if (firstOld) createdAt = firstOld;
     deleteWhere_('contributions', r => String(r.BatchID) === String(b.BatchID));
@@ -471,12 +473,75 @@ function apiSaveContribution_(b) {
     return {
       ID: newId_('C'), BatchID: batch, Date: date, Fund: l.fund, Currency: cur,
       AmountFX: cur === 'USD' ? round2_(thb / rate) : thb, Rate: rate, AmountTHB: thb,
-      Account: b.account || '', Note: b.note || '', Source: 'manual', Units: units, CreatedAt: createdAt,
+      Account: b.account || '', Note: b.note || '', Source: b.sourceFund ? 'transfer' : 'manual', Units: units, CreatedAt: createdAt,
     };
   });
+  if (b.sourceFund) rows.push(transferOut_(b.sourceFund, rows.reduce((s, r) => s + num_(r.AmountTHB), 0), batch, date, b.note, createdAt, lines.map(l => l.fund)));
   appendRows_('contributions', rows);
   navUpdates.forEach(u => updateById_('funds', 'Name', u.name, { NAV: u.nav, NavDate: date }));
   return rows.length;
+}
+
+/** ดึงเงินออกจากกองต้นทางเพื่อย้ายไปกองอื่น (ไม่นับเป็นการดึงเงินมาใช้ และไม่นับเป็นเงินออมใหม่) */
+function transferOut_(srcName, thb, batch, date, note, createdAt, destNames) {
+  if (destNames.indexOf(srcName) >= 0) throw new Error('กองต้นทางกับกองที่ลงเงินต้องไม่ใช่กองเดียวกัน');
+  const f = readTable_('funds').find(x => String(x.Name) === String(srcName));
+  if (!f) throw new Error('ไม่พบกอง ' + srcName);
+  const v = fundsValuation_().find(x => x.Name === String(f.Name));
+  if (!v || thb > v.valueTHB + 0.005) throw new Error('ยอดใน ' + srcName + ' ไม่พอ (มี ' + (v ? v.valueTHB.toLocaleString() : 0) + ' บาท)');
+  const kind = fundKind_(f);
+  const costOut = round2_(v.cost * (v.valueTHB ? thb / v.valueTHB : 1));
+  let amountFX = -thb, units = '', rate = 1, cur = 'THB';
+  if (kind === KIND_USD) { cur = 'USD'; rate = usdRate_(); amountFX = -round2_(thb / rate); }
+  else if (isUnitKind_(kind)) { units = -Math.round(thb / v.nav * 10000) / 10000; amountFX = -costOut; }
+  return {
+    ID: newId_('C'), BatchID: batch, Date: date, Fund: String(f.Name), Currency: cur, AmountFX: amountFX, Rate: rate,
+    AmountTHB: -costOut, Account: '', Note: note || ('ย้ายไป ' + destNames.join(', ')), Source: 'transfer', Units: units, Cash: -thb, CreatedAt: createdAt,
+  };
+}
+
+/**
+ * รับเงินปันผล: บันทึกเป็นรายรับ แล้ว (ถ้าเลือก) ซื้อหุ้นตัวนั้นเพิ่ม หรือเก็บเข้ากองเงินสด
+ * {date, fund, amountTHB?, amountUSD?, rate?, mode: 'reinvest'|'cash'|'none', price?, cashFund?, account?, note?}
+ */
+function apiReceiveDividend_(d) {
+  const f = readTable_('funds').find(x => String(x.Name) === String(d.fund));
+  if (!f) throw new Error('ไม่พบหุ้น/กอง ' + d.fund);
+  const v = fundsValuation_().find(x => x.Name === String(f.Name)) || {};
+  const rate = num_(d.rate) || usdRate_();
+  const thb = round2_(num_(d.amountTHB) || num_(d.amountUSD) * rate);
+  if (thb <= 0) throw new Error('กรุณาใส่ยอดเงินปันผล');
+  const foreign = v.priceCurrency === 'USD' || (cleanTicker_(f.Ticker) && cleanTicker_(f.Ticker).indexOf('BKK:') !== 0);
+  const category = foreign ? DIV_FOREIGN_CATEGORY : DIV_CATEGORY;
+  if (!readTable_('categories').some(c => c.Type === INCOME && String(c.Name) === category)) {
+    appendRows_('categories', [{ Type: INCOME, Name: category, MonthlyBudget: '', Active: true, NoTax: foreign }]);
+  }
+  const usdTxt = num_(d.amountUSD) ? ' $' + num_(d.amountUSD) + ' @' + rate : '';
+  const note = d.note || ('ปันผล ' + f.Name + usdTxt);
+  apiSaveTransaction_({
+    Date: d.date, Type: INCOME, Category: category, Amount: thb, Account: d.account || '', Note: note, Item: String(f.Name), Source: 'dividend',
+  });
+  if (d.mode === 'reinvest') {
+    apiSaveContribution_({ date: d.date, account: d.account || '', note: 'ปันผลซื้อเพิ่ม ' + f.Name, lines: [{ fund: String(f.Name), amountTHB: thb, nav: num_(d.price) }] });
+  } else if (d.mode === 'cash') {
+    if (!d.cashFund) throw new Error('กรุณาเลือกกองที่เก็บเงินปันผล');
+    apiSaveContribution_({ date: d.date, account: d.account || '', note: 'ปันผล ' + f.Name, lines: [{ fund: d.cashFund, amountTHB: thb, rate: rate }] });
+  }
+  return { amountTHB: thb, category: category };
+}
+
+/** สรุปเงินปันผลรายหุ้น: ปีนี้ / ทั้งหมด */
+function dividendSummary_() {
+  const y = String(new Date().getFullYear());
+  const by = {};
+  readTable_('tx').filter(t => t.Type === INCOME && (String(t.Category) === DIV_CATEGORY || String(t.Category) === DIV_FOREIGN_CATEGORY)).forEach(t => {
+    const k = String(t.Item || '') || 'ไม่ระบุหุ้น';
+    const s = by[k] = by[k] || { name: k, year: 0, total: 0, count: 0, last: '' };
+    s.total += num_(t.Amount); s.count++;
+    if (fmtDate_(t.Date).slice(0, 4) === y) s.year += num_(t.Amount);
+    if (fmtDate_(t.Date) > s.last) s.last = fmtDate_(t.Date);
+  });
+  return Object.keys(by).map(k => by[k]).map(s => Object.assign(s, { year: round2_(s.year), total: round2_(s.total) })).sort((a, b) => b.total - a.total);
 }
 
 function apiDeleteContributionBatch_(batchId) {
@@ -726,14 +791,22 @@ function apiTax_(year) {
       .forEach(f => { out[f] = optNum_(prev[f]); });
     out.saved = false;
   }
-  const autoIncome = readTable_('tx').filter(t => t.Type === INCOME && monthStr_(t.Date).slice(0, 4) === String(year))
-    .reduce((s, t) => s + num_(t.Amount), 0);
+  const noTax = {};
+  readTable_('categories').forEach(c => { if (c.Type === INCOME && isTrue_(c.NoTax)) noTax[String(c.Name)] = true; });
+  const excluded = {};
+  let autoIncome = 0;
+  readTable_('tx').filter(t => t.Type === INCOME && monthStr_(t.Date).slice(0, 4) === String(year)).forEach(t => {
+    const cat = String(t.Category);
+    if (noTax[cat]) excluded[cat] = round2_((excluded[cat] || 0) + num_(t.Amount));
+    else autoIncome += num_(t.Amount);
+  });
   const years = rows.map(r => Number(r.Year));
   readTable_('tx').forEach(t => { const y = Number(monthStr_(t.Date).slice(0, 4)); if (y) years.push(y); });
   years.push(new Date().getFullYear());
   return {
     row: out,
     autoIncome: round2_(autoIncome),
+    excluded: excluded,
     brackets: readTable_('taxBrackets').map(b => ({ Min: num_(b.Min), Max: optNum_(b.Max), Rate: num_(b.Rate) })).sort((a, b) => a.Min - b.Min),
     years: Array.from(new Set(years)).sort((a, b) => b - a),
   };

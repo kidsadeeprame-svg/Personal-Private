@@ -14,11 +14,13 @@ const SPREADSHEET_ID = '';
 const TZ = 'Asia/Bangkok';
 
 // เพิ่มเลขนี้เมื่อเปลี่ยนโครงสร้างแท็บ เพื่อให้หัวคอลัมน์ถูกอัปเดตอัตโนมัติ
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const INCOME = 'รายรับ';
 const EXPENSE = 'รายจ่าย';
 const INTEREST_CATEGORY = 'ดอกเบี้ยรับ (เงินให้ยืม)';
+const DIV_CATEGORY = 'เงินปันผล';
+const DIV_FOREIGN_CATEGORY = 'เงินปันผลต่างประเทศ';
 
 const GOAL_EMERGENCY = 'ฉุกเฉิน';
 const GOAL_RETIREMENT = 'เกษียณ';
@@ -49,7 +51,7 @@ const BONUS_CATEGORY = 'โบนัส';
  */
 const SHEETS = {
   config:        { name: 'App_Config',        headers: ['Key', 'Value', 'Description'] },
-  categories:    { name: 'App_Categories',    headers: ['Type', 'Name', 'MonthlyBudget', 'Active'] },
+  categories:    { name: 'App_Categories',    headers: ['Type', 'Name', 'MonthlyBudget', 'Active', 'NoTax'] },
   accounts:      { name: 'App_Accounts',      headers: ['Name', 'Active'] },
   tx:            { name: 'App_Transactions',  headers: ['ID', 'Date', 'Type', 'Category', 'Amount', 'Account', 'Note', 'ReceiptUrl', 'Source', 'CreatedAt', 'Item'] },
   recurring:     { name: 'App_Recurring',     headers: ['ID', 'Name', 'Type', 'Category', 'Amount', 'Account', 'DayOfMonth', 'Active', 'LastPostedMonth', 'Item'], text: ['LastPostedMonth'] },
