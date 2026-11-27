@@ -326,8 +326,15 @@ PAGES.dashboard = async token => {
 
   $('#dash-month').addEventListener('change', e => { S.dashMonth = e.target.value; refresh(); });
   $('#dash-add').addEventListener('click', () => txModal(null, refresh));
-  $$('[data-pay]').forEach(b => b.addEventListener('click', () => {
+  $$('[data-pay]').forEach(b => b.addEventListener('click', async () => {
     const c = d.checklist[+b.dataset.pay];
+    if (c.installment) {
+      if (c.remaining <= 0) return toast('งวดนี้บันทึกจ่ายแล้ว');
+      b.disabled = true;
+      try { await api('postInstallments', [c.installment], d.month); toast('บันทึกงวดผ่อนแล้ว'); S.txCache = {}; clearApiCache(); refresh(); }
+      catch (e) { b.disabled = false; toast(errMsg(e), true); }
+      return;
+    }
     txModal(null, () => { S.txCache = {}; clearApiCache(); refresh(); },
       { Type: EXPENSE, Category: c.category, Item: c.item, Amount: c.remaining || c.plan, Note: c.item || c.category });
   }));

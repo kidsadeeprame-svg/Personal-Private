@@ -1027,11 +1027,26 @@ function apiDashboard_(month) {
 
   // รายการที่ต้องจ่ายตามแผนรอบนี้ (ระดับรายการย่อยถ้ามี) พร้อมยอดที่จ่ายแล้ว
   const checklist = [];
+  // งวดผ่อน (แผนผ่อน) แยกเป็นแถวของตัวเอง และหักออกจากยอดหมวด ไม่ให้นับซ้ำ
+  const instTx = {};
+  readTable_('tx').forEach(t => {
+    const src = String(t.Source || '');
+    if (src.indexOf('installment:') === 0 && cycleMonth_(t.Date) === month) instTx[src.slice(12)] = (instTx[src.slice(12)] || 0) + num_(t.Amount);
+  });
+  const instRows = [], instByCat = {};
+  installments_().filter(i => installmentActive_(i, month) && (!i.done || i.paidMonths[month])).forEach(i => {
+    const paid = round2_(instTx[i.ID] || 0);
+    instRows.push({ category: i.Category, item: 'ผ่อน: ' + i.Name + ' (งวด ' + Math.min(i.Months, i.paidCount + (i.paidMonths[month] ? 0 : 1)) + '/' + i.Months + ')', plan: i.Monthly, paid: paid, installment: i.ID });
+    const b = instByCat[i.Category] = instByCat[i.Category] || { plan: 0, paid: 0 };
+    b.plan += i.Monthly; b.paid += paid;
+  });
   apiPlanVsActual_(month).rows.filter(r => r.type === EXPENSE).forEach(r => {
     const subs = (r.items || []).filter(i => !i.unassigned && i.plan > 0);
+    const ib = instByCat[r.category] || { plan: 0, paid: 0 };
     if (subs.length) subs.forEach(i => checklist.push({ category: r.category, item: i.item, plan: i.plan, paid: i.actual }));
-    else if (r.plan > 0) checklist.push({ category: r.category, item: '', plan: r.plan, paid: r.actual });
+    else if (r.plan - ib.plan > 0.005) checklist.push({ category: r.category, item: '', plan: round2_(r.plan - ib.plan), paid: round2_(r.actual - ib.paid) });
   });
+  instRows.forEach(r => checklist.push(r));
   checklist.forEach(c => { c.remaining = round2_(Math.max(0, c.plan - c.paid)); });
   checklist.sort((a, b) => (b.remaining > 0) - (a.remaining > 0) || b.remaining - a.remaining);
   const installmentsPending = apiInstallments_(month).filter(i => i.dueThisMonth)
