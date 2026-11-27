@@ -59,6 +59,7 @@ const API_ = {
   plan: apiPlan_,
   savePlanCell: apiSavePlanCell_,
   resetPlanMonth: apiResetPlanMonth_,
+  copyPlanMonth: apiCopyPlanMonth_,
   planVsActual: apiPlanVsActual_,
   projection: apiProjection_,
   importPlan: importLegacyPlan,
@@ -76,7 +77,7 @@ const API_ = {
 const WRITE_APIS_ = ['saveTransaction', 'deleteTransaction', 'saveRecurring', 'deleteRecurring', 'postRecurring',
   'saveContribution', 'deleteContributionBatch', 'saveSnapshots', 'deleteSnapshot', 'resetInvest', 'withdraw', 'receiveDividend', 'saveLoan', 'deleteLoan',
   'savePayment', 'deletePayment', 'saveTax', 'saveVisit', 'deleteVisit', 'saveTable',
-  'savePlanCell', 'resetPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments',
+  'savePlanCell', 'resetPlanMonth', 'copyPlanMonth', 'saveInstallment', 'deleteInstallment', 'postInstallments',
   'savePlanItem', 'deletePlanItem'];
 
 function api(name, argsJson) {
@@ -1052,6 +1053,6 @@ function apiDashboard_(month) {
     },
     budgets, expenseByCat, trend, goals,
     loans: { total: round2_(openLoans.reduce((s, l) => s + l.remaining, 0)), list: openLoans },
-    recurringPending, installmentsPending, planNow, planAlerts, refill: refillStatus_(), checklist,
+    recurringPending, installmentsPending, planNow, planAlerts, refill: refillStatus_(), checklist, savingsPlan: savingsPlan_(month),
   };
 }

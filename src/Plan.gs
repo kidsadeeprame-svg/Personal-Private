@@ -350,6 +350,27 @@ function apiDeletePlanItem_(id) {
 }
 
 /** ล้างค่าที่แก้เองของทั้งเดือน (กลับไปใช้ค่าตั้งต้น) */
+/** คัดลอกช่องที่แก้เองของแผนจากเดือนหนึ่งไปอีกเดือน (overwrite = ทับช่องที่มีอยู่แล้วในเดือนปลายทาง) */
+function apiCopyPlanMonth_(from, to, overwrite) {
+  from = monthStr_(from); to = monthStr_(to);
+  if (!from || !to || from === to) throw new Error('เลือกเดือนต้นทางและปลายทางให้ต่างกัน');
+  const key = r => r.Type + '|' + r.Category + '|' + normItem_(r.Item);
+  const src = readTable_('plan').filter(r => monthStr_(r.Month) === from);
+  if (!src.length) throw new Error('เดือนต้นทางยังไม่มีตัวเลขที่แก้เอง (ใช้ค่าตั้งต้นอยู่แล้ว)');
+  const dst = {};
+  readTable_('plan').filter(r => monthStr_(r.Month) === to).forEach(r => { dst[key(r)] = true; });
+  if (overwrite) {
+    const keys = {};
+    src.forEach(r => { keys[key(r)] = true; });
+    deleteWhere_('plan', r => monthStr_(r.Month) === to && keys[key(r)]);
+  }
+  const rows = src.filter(r => overwrite || !dst[key(r)]).map(r => ({
+    Month: to, Type: r.Type, Category: r.Category, Amount: num_(r.Amount), Source: 'copy', Item: r.Item || '',
+  }));
+  appendRows_('plan', rows);
+  return rows.length;
+}
+
 function apiResetPlanMonth_(month) {
   month = monthStr_(month);
   return deleteWhere_('plan', r => monthStr_(r.Month) === month);
