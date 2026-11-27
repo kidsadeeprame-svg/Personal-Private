@@ -14,7 +14,7 @@ const SPREADSHEET_ID = '';
 const TZ = 'Asia/Bangkok';
 
 // เพิ่มเลขนี้เมื่อเปลี่ยนโครงสร้างแท็บ เพื่อให้หัวคอลัมน์ถูกอัปเดตอัตโนมัติ
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const INCOME = 'รายรับ';
 const EXPENSE = 'รายจ่าย';
@@ -27,9 +27,10 @@ const GOAL_OTHER = 'อื่นๆ';
 // ประเภทกองเงินออม/ลงทุน
 const KIND_CASH = 'เงินฝาก/เงินสด';
 const KIND_FUND = 'กองทุนรวม';       // จำนวนหน่วย × NAV
+const KIND_STOCK = 'หุ้น';           // จำนวนหุ้น × ราคา (ดึงราคาอัตโนมัติได้ถ้าใส่ชื่อย่อ)
 const KIND_USD = 'เงิน USD';
 const KIND_OTHER = 'ประกัน/อื่นๆ';
-const FUND_KINDS = [KIND_CASH, KIND_FUND, KIND_USD, KIND_OTHER];
+const FUND_KINDS = [KIND_CASH, KIND_FUND, KIND_STOCK, KIND_USD, KIND_OTHER];
 
 const LOAN_OPEN = 'ค้างชำระ';
 const LOAN_OVERDUE = 'เกินกำหนด';
@@ -52,7 +53,7 @@ const SHEETS = {
   accounts:      { name: 'App_Accounts',      headers: ['Name', 'Active'] },
   tx:            { name: 'App_Transactions',  headers: ['ID', 'Date', 'Type', 'Category', 'Amount', 'Account', 'Note', 'ReceiptUrl', 'Source', 'CreatedAt', 'Item'] },
   recurring:     { name: 'App_Recurring',     headers: ['ID', 'Name', 'Type', 'Category', 'Amount', 'Account', 'DayOfMonth', 'Active', 'LastPostedMonth', 'Item'], text: ['LastPostedMonth'] },
-  funds:         { name: 'App_Funds',         headers: ['Name', 'Currency', 'Goal', 'Active', 'Kind', 'NAV', 'NavDate'] },
+  funds:         { name: 'App_Funds',         headers: ['Name', 'Currency', 'Goal', 'Active', 'Kind', 'NAV', 'NavDate', 'Ticker'] },
   contributions: { name: 'App_Contributions', headers: ['ID', 'BatchID', 'Date', 'Fund', 'Currency', 'AmountFX', 'Rate', 'AmountTHB', 'Account', 'Note', 'Source', 'Units', 'Cash', 'Refill', 'CreatedAt'] },
   snapshots:     { name: 'App_FundSnapshots', headers: ['ID', 'Month', 'Fund', 'Currency', 'ValueFX', 'Rate', 'ValueTHB', 'SavedAt'], text: ['Month'] },
   loans:         { name: 'App_Loans',         headers: ['LoanID', 'Borrower', 'Date', 'Principal', 'SourceAccount', 'InterestType', 'InterestRate', 'InterestNote', 'DueDate', 'PayAccountNo', 'Bank', 'Note', 'Closed'], text: ['PayAccountNo'] },
@@ -63,6 +64,7 @@ const SHEETS = {
   healthVisits:  { name: 'App_HealthVisits',  headers: ['VisitID', 'Date', 'Hospital', 'FileUrl', 'Note'] },
   healthResults: { name: 'App_HealthResults', headers: ['VisitID', 'Item', 'Value'] },
   plan:          { name: 'App_Plan',          headers: ['Month', 'Type', 'Category', 'Amount', 'Source', 'Item'], text: ['Month'] },
+  prices:        { name: 'App_Prices',        headers: ['Ticker', 'Price', 'Currency'] },
   planItems:     { name: 'App_PlanItems',     headers: ['ID', 'Type', 'Category', 'Name', 'DefaultAmount', 'Order', 'Active'] },
   installments:  { name: 'App_Installments',  headers: ['ID', 'Name', 'Total', 'Months', 'StartMonth', 'Monthly', 'Category', 'Account', 'DayOfMonth', 'Note'], text: ['StartMonth'] },
 };

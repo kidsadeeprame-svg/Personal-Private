@@ -41,6 +41,7 @@ const API_ = {
   deleteSnapshot: apiDeleteSnapshot_,
   resetInvest: apiResetInvest_,
   withdraw: apiWithdraw_,
+  quote: apiQuote_,
   loans: apiLoans_,
   saveLoan: apiSaveLoan_,
   deleteLoan: apiDeleteLoan_,
@@ -104,7 +105,7 @@ function apiBootstrap_() {
     config: getConfig_(),
     categories: readTable_('categories').map(c => ({ Type: c.Type, Name: String(c.Name), MonthlyBudget: optNum_(c.MonthlyBudget), Active: isActive_(c.Active) })),
     accounts: readTable_('accounts').map(a => ({ Name: String(a.Name), Active: isActive_(a.Active) })),
-    funds: readTable_('funds').map(f => ({ Name: String(f.Name), Currency: f.Currency || 'THB', Goal: f.Goal, Active: isActive_(f.Active), Kind: fundKind_(f), NAV: num_(f.NAV) })),
+    funds: readTable_('funds').map(f => ({ Name: String(f.Name), Currency: f.Currency || 'THB', Goal: f.Goal, Active: isActive_(f.Active), Kind: fundKind_(f), NAV: num_(f.NAV), Ticker: cleanTicker_(f.Ticker) })),
     fundKinds: FUND_KINDS,
     healthItems: healthItems_(),
     planItems: planItems_().map(i => ({ Type: i.Type, Category: i.Category, Name: i.Name })),
@@ -327,24 +328,71 @@ function refillStatus_() {
   return Object.keys(by).map(k => by[k]).filter(s => s.owed > 0.005).map(s => Object.assign(s, { owed: round2_(s.owed) }));
 }
 
+/** กองที่คิดมูลค่าแบบ จำนวนหน่วย × ราคา */
+function isUnitKind_(kind) {
+  return kind === KIND_FUND || kind === KIND_STOCK;
+}
+
+function cleanTicker_(t) {
+  return String(t || '').trim().toUpperCase().replace(/[^A-Z0-9:.\-]/g, '');
+}
+
+/** ราคาหุ้นจาก GOOGLEFINANCE (เก็บสูตรไว้ในแท็บ App_Prices) → { TICKER: {price, currency} } */
+function livePrices_() {
+  const out = {};
+  readTable_('prices').forEach(r => {
+    const p = num_(r.Price);
+    if (p > 0) out[cleanTicker_(r.Ticker)] = { price: p, currency: String(r.Currency || '').toUpperCase() };
+  });
+  return out;
+}
+
+/** ให้แท็บ App_Prices มีสูตรของทุกชื่อย่อที่ใช้ */
+function syncTickers_(tickers) {
+  const have = readTable_('prices').map(r => cleanTicker_(r.Ticker));
+  const add = tickers.map(cleanTicker_).filter((t, i, a) => t && a.indexOf(t) === i && have.indexOf(t) < 0);
+  if (!add.length) return false;
+  appendRows_('prices', add.map(t => ({
+    Ticker: t, Price: '=IFERROR(GOOGLEFINANCE("' + t + '","price"),"")', Currency: '=IFERROR(GOOGLEFINANCE("' + t + '","currency"),"")',
+  })));
+  return true;
+}
+
+/** ราคาล่าสุดของหุ้น 1 ตัว (เป็นบาท) — ใช้ตอนกรอกชื่อย่อ */
+function apiQuote_(ticker) {
+  const t = cleanTicker_(ticker);
+  if (!t) throw new Error('กรุณาใส่ชื่อย่อหุ้น');
+  if (syncTickers_([t])) { SpreadsheetApp.flush(); Utilities.sleep(1500); }
+  let q = livePrices_()[t];
+  if (!q) { SpreadsheetApp.flush(); Utilities.sleep(2000); invalidate_('prices'); q = livePrices_()[t]; }
+  if (!q) throw new Error('ดึงราคา ' + t + ' ไม่ได้ ตรวจชื่อย่อ (เช่น BKK:PTT, NASDAQ:AAPL) หรือกรอกราคาเอง');
+  const rate = q.currency === 'USD' ? usdRate_() : 1;
+  return { ticker: t, price: q.price, currency: q.currency || 'THB', priceTHB: round2_(q.price * rate) };
+}
+
 function fundsValuation_() {
   const rate = usdRate_();
   const funds = readTable_('funds');
   const contrib = readTable_('contributions');
   const snaps = readTable_('snapshots');
+  const prices = livePrices_();
   return funds.map(f => {
     const name = String(f.Name), kind = fundKind_(f);
     const cur = kind === KIND_USD ? 'USD' : 'THB';
     const cs = contrib.filter(c => String(c.Fund) === name);
     const cost = cs.reduce((s, c) => s + num_(c.AmountTHB), 0);
-    if (kind === KIND_FUND) {
-      // กองทุนรวม: มูลค่า = จำนวนหน่วยรวม × NAV ล่าสุด
+    if (isUnitKind_(kind)) {
+      // กองทุนรวม/หุ้น: มูลค่า = จำนวนหน่วยรวม × ราคาล่าสุด (หุ้นที่มีชื่อย่อใช้ราคาจาก GOOGLEFINANCE)
       const units = cs.reduce((s, c) => s + num_(c.Units), 0);
-      const nav = num_(f.NAV);
+      const ticker = cleanTicker_(f.Ticker);
+      const q = ticker ? prices[ticker] : null;
+      const live = q ? round2_(q.price * (q.currency === 'USD' ? rate : 1)) : 0;
+      const nav = live || num_(f.NAV);
       const value = nav > 0 ? units * nav : cost;
       return {
         Name: name, Currency: 'THB', Goal: f.Goal, Active: isActive_(f.Active), Kind: kind,
-        units: Math.round(units * 10000) / 10000, nav: nav, navDate: fmtDate_(f.NavDate),
+        ticker: ticker, livePrice: !!live, priceCurrency: q ? q.currency : '', priceFX: q ? q.price : '',
+        units: Math.round(units * 10000) / 10000, nav: nav, navDate: live ? fmtDate_(new Date()) : fmtDate_(f.NavDate),
         cost: round2_(cost), valueFX: round2_(value), valueTHB: round2_(value),
         gain: round2_(value - cost), lastSnapshot: fmtDate_(f.NavDate).slice(0, 7),
       };
@@ -368,6 +416,7 @@ function fundsValuation_() {
 
 function apiInvest_() {
   const cfg = getConfig_();
+  syncTickers_(readTable_('funds').filter(x => fundKind_(x) === KIND_STOCK).map(x => x.Ticker));
   return {
     usdRate: usdRate_(),
     funds: fundsValuation_(),
@@ -413,9 +462,9 @@ function apiSaveContribution_(b) {
     const rate = cur === 'USD' ? num_(l.rate) : 1;
     if (cur === 'USD' && !rate) throw new Error('กรุณาใส่อัตราแลกเปลี่ยนของ ' + l.fund);
     let units = '';
-    if (kind === KIND_FUND) {
+    if (isUnitKind_(kind)) {
       const nav = num_(l.nav) || num_(f.NAV);
-      if (!nav) throw new Error('กรุณาใส่ NAV ที่ซื้อของ ' + l.fund);
+      if (!nav) throw new Error('กรุณาใส่ราคา/NAV ที่ซื้อของ ' + l.fund);
       units = Math.round(thb / nav * 10000) / 10000;
       if (!f.NavDate || fmtDate_(date) >= fmtDate_(f.NavDate)) navUpdates.push({ name: l.fund, nav: nav });
     }
@@ -450,7 +499,7 @@ function apiSaveSnapshots_(b) {
   const rows = items.map(i => {
     const f = funds[i.fund] || {};
     const kind = fundKind_(f);
-    if (kind === KIND_FUND && has(i.nav)) {
+    if (isUnitKind_(kind) && has(i.nav)) {
       // กองทุนรวม: อัปเดต NAV แล้วเก็บมูลค่า (หน่วย × NAV) ไว้เป็นประวัติ
       const nav = num_(i.nav);
       updateById_('funds', 'Name', i.fund, { NAV: nav, NavDate: today });
@@ -481,7 +530,9 @@ function apiResetInvest_(rows) {
     if (names[n]) throw new Error('ชื่อซ้ำ: ' + n);
     names[n] = true;
     if (FUND_KINDS.indexOf(r.Kind) < 0) throw new Error('ประเภทไม่ถูกต้อง: ' + n);
-    if (r.Kind === KIND_FUND && (!num_(r.NAV) || num_(r.Units) < 0)) throw new Error('กองทุนรวม "' + n + '" ต้องมีจำนวนหน่วยและ NAV');
+    if (isUnitKind_(r.Kind) && num_(r.Units) < 0) throw new Error('"' + n + '" จำนวนหน่วยติดลบไม่ได้');
+    if (r.Kind === KIND_FUND && !num_(r.NAV)) throw new Error('กองทุนรวม "' + n + '" ต้องมีจำนวนหน่วยและ NAV');
+    if (r.Kind === KIND_STOCK && !num_(r.NAV) && !cleanTicker_(r.Ticker)) throw new Error('หุ้น "' + n + '" ต้องมีราคาหรือชื่อย่อหุ้น');
   });
 
   // 1) สำรองแท็บเดิมไว้ในชีต
@@ -502,11 +553,12 @@ function apiResetInvest_(rows) {
     const name = String(r.Name).trim(), kind = r.Kind;
     const goal = r.Goal || GOAL_OTHER;
     const cur = kind === KIND_USD ? 'USD' : 'THB';
-    const fund = { Name: name, Currency: cur, Goal: goal, Active: true, Kind: kind, NAV: '', NavDate: '' };
+    const fund = { Name: name, Currency: cur, Goal: goal, Active: true, Kind: kind, NAV: '', NavDate: '', Ticker: kind === KIND_STOCK ? cleanTicker_(r.Ticker) : '' };
     let valueFX, valueTHB, units = '';
-    if (kind === KIND_FUND) {
+    if (isUnitKind_(kind)) {
       units = num_(r.Units);
       fund.NAV = num_(r.NAV);
+      if (!fund.NAV && fund.Ticker) fund.NAV = apiQuote_(fund.Ticker).priceTHB;
       fund.NavDate = today;
       valueFX = valueTHB = round2_(units * fund.NAV);
     } else if (kind === KIND_USD) {
@@ -524,11 +576,12 @@ function apiResetInvest_(rows) {
         AmountTHB: cost, Account: '', Note: 'ยอดตั้งต้น', Source: 'opening', Units: units, CreatedAt: today,
       });
     }
-    if (kind !== KIND_FUND) {
+    if (!isUnitKind_(kind)) {
       snaps.push({ ID: newId_('S'), Month: month, Fund: name, Currency: cur, ValueFX: valueFX, Rate: kind === KIND_USD ? rate : 1, ValueTHB: valueTHB, SavedAt: new Date(today.getTime() + 1) });
     }
   });
   replaceTable_('funds', funds);
+  syncTickers_(funds.map(x => x.Ticker).filter(Boolean));
   replaceTable_('contributions', contrib);
   replaceTable_('snapshots', snaps);
   return { funds: funds.length, backup: 'Backup_*_' + stamp };
@@ -553,9 +606,9 @@ function apiWithdraw_(w) {
     cur = 'USD';
     rate = num_(w.rate) || usdRate_();
     amountFX = -round2_(thb / rate);
-  } else if (kind === KIND_FUND) {
-    const nav = num_(w.nav) || num_(f.NAV);
-    if (!nav) throw new Error('กรุณาใส่ NAV ที่ขาย');
+  } else if (isUnitKind_(kind)) {
+    const nav = num_(w.nav) || (v && v.nav) || num_(f.NAV);
+    if (!nav) throw new Error('กรุณาใส่ราคา/NAV ที่ขาย');
     units = -Math.round(thb / nav * 10000) / 10000;
     amountFX = -costOut;
   }
@@ -784,6 +837,10 @@ function apiSaveTable_(key, rows) {
       return r.Key === 'USD_THB' ? d : { Key: r.Key, Value: r.Value, Description: r.Description };
     });
     clean = clean.filter(r => HIDDEN_CONFIG_.indexOf(r.Key) < 0).concat(keep);
+  }
+  if (key === 'funds') {
+    clean.forEach(r => { r.Ticker = cleanTicker_(r.Ticker); });
+    syncTickers_(clean.map(r => r.Ticker));
   }
   replaceTable_(key, clean);
   return clean.length;
