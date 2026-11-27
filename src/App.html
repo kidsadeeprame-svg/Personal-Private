@@ -104,6 +104,8 @@ function opts(list, selected, withBlank) {
 const cats = (type, includeName) => S.boot.categories.filter(c => c.Type === type && (c.Active || c.Name === includeName)).map(c => c.Name);
 const accounts = include => S.boot.accounts.filter(a => a.Active || a.Name === include).map(a => a.Name);
 const activeFunds = () => S.boot.funds.filter(f => f.Active);
+const normName = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+const fundByItem = name => S.boot.funds.find(f => normName(f.Name) === normName(name));
 const itemsOf = (type, cat) => (S.boot.planItems || []).filter(i => i.Type === type && i.Category === cat).map(i => i.Name);
 /** ช่องเลือกรายการย่อย (แสดงเมื่อหมวดมีรายการย่อยในแผน) */
 const normItem = s => String(s || '').replace(/\s+/g, '').toLowerCase();
@@ -1562,7 +1564,8 @@ async function planMonthHtml() {
       subs.forEach(x => {
         out += x.loan
           ? rowHtml(x, 'pl-subrow', '<span class="muted">↳ ' + esc(x.label) + '</span>')
-          : rowHtml(x, 'pl-subrow', '<a class="pl-item" data-id="' + esc(x.itemId) + '" title="แก้ไข/ลบรายการย่อย">↳ ' + esc(x.item) + '</a>');
+          : rowHtml(x, 'pl-subrow', '<a class="pl-item" data-id="' + esc(x.itemId) + '" title="แก้ไข/ลบรายการย่อย">↳ ' + esc(x.item) + '</a>' +
+            (x.type === PLAN_SAVING_TYPE && !fundByItem(x.item) ? ' <span class="badge warn" title="กดที่ชื่อเพื่อเลือกกองที่มีอยู่ ปุ่ม &quot;ออม&quot; จะได้เติมยอดลงกองให้">ยังไม่ผูกกอง</span>' : ''));
       });
       if (r.loanInterest) {
         out += '<tr class="pl-subrow"><td colspan="' + (p.months.length + 2) + '" class="muted small">คำนวณจากเงินให้ยืมที่ยังไม่ปิดยอด (เงินต้นคงเหลือ × % ต่อเดือน) จนกว่าจะปิดยอด · ' +
@@ -1716,11 +1719,16 @@ function planItemModal(it) {
   openModal({
     title: (isNew ? 'เพิ่มรายการย่อย' : 'แก้ไขรายการย่อย') + ' · ' + it.Category,
     body: '<div class="form-grid">' +
-      field('ชื่อรายการย่อย', '<input name="Name" value="' + esc(it.Name || '') + '" placeholder="เช่น โทรศัพท์เปรม">', 'full') +
+      (it.Type === PLAN_SAVING_TYPE && activeFunds().length
+        ? field('เลือกกองที่มีอยู่', '<select id="pi-fund"><option value="">— พิมพ์ชื่อเอง —</option>' +
+          activeFunds().map(fd => '<option' + (fundByItem(it.Name) && fundByItem(it.Name).Name === fd.Name ? ' selected' : '') + '>' + esc(fd.Name) + '</option>').join('') + '</select>', 'full') : '') +
+      field('ชื่อรายการย่อย', '<input name="Name" value="' + esc(it.Name || '') + '" placeholder="' + (it.Type === PLAN_SAVING_TYPE ? 'ชื่อกอง' : 'เช่น โทรศัพท์เปรม') + '">', 'full') +
       field('จำนวนต่อเดือน (ค่าตั้งต้นทุกเดือน)', '<input type="number" step="0.01" name="DefaultAmount" value="' + esc(isNew ? '' : it.DefaultAmount) + '">', 'full') +
       '<p class="full muted small" style="margin:0">ตัวเลขนี้ใช้ทุกเดือน แก้รายเดือนได้ในตาราง · ยอดของหมวด ' + esc(it.Category) + ' จะเท่ากับผลรวมรายการย่อย</p>' +
       (isNew ? '' : '<div class="full"><button type="button" class="btn danger sm" id="pi-del">ลบรายการย่อยนี้</button></div>') + '</div>',
     onOpen: root => {
+      const pf = $('#pi-fund', root);
+      if (pf) pf.addEventListener('change', () => { if (pf.value) $('input[name=Name]', root).value = pf.value; });
       const del = $('#pi-del', root);
       if (del) del.addEventListener('click', () => confirmAction('ลบรายการย่อย "' + it.Name + '" และตัวเลขที่แก้ไว้ทุกเดือน?', async () => {
         await api('deletePlanItem', it.ID); S.boot = await api('bootstrap'); closeModal(); toast('ลบแล้ว'); refresh();
