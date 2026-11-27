@@ -1572,6 +1572,7 @@ async function planMonthHtml() {
         out += x.loan
           ? rowHtml(x, 'pl-subrow', '<span class="muted">↳ ' + esc(x.label) + '</span>')
           : rowHtml(x, 'pl-subrow', '<a class="pl-item" data-id="' + esc(x.itemId) + '" title="แก้ไข/ลบรายการย่อย">↳ ' + esc(x.item) + '</a>' +
+            (x.schedule && x.schedule.length ? ' <span class="badge" title="จ่ายเฉพาะเดือนที่เลือก">' + x.schedule.map(n => TH_MONTHS[n - 1]).join(', ') + '</span>' : '') +
             (x.type === PLAN_SAVING_TYPE && !fundByItem(x.item) ? ' <span class="badge warn" title="กดที่ชื่อเพื่อเลือกกองที่มีอยู่ ปุ่ม &quot;ออม&quot; จะได้เติมยอดลงกองให้">ยังไม่ผูกกอง</span>' : ''));
       });
       if (r.loanInterest) {
@@ -1622,7 +1623,7 @@ async function planMonthHtml() {
       $$('.pl-additem').forEach(a => a.addEventListener('click', () => planItemModal({ Type: a.dataset.type, Category: a.dataset.cat })));
       $$('.pl-item').forEach(a => a.addEventListener('click', () => {
         const r = S.planData.rows.find(x => x.itemId === a.dataset.id);
-        planItemModal({ ID: r.itemId, Type: r.type, Category: r.category, Name: r.item, DefaultAmount: r.cells[0].def });
+        planItemModal({ ID: r.itemId, Type: r.type, Category: r.category, Name: r.item, DefaultAmount: r.defaultAmount, Months: r.schedule || [] });
       }));
       $$('.pl-cell').forEach(inp => {
         inp.addEventListener('focus', () => inp.select());
@@ -1730,10 +1731,18 @@ function planItemModal(it) {
         ? field('เลือกกองที่มีอยู่', '<select id="pi-fund"><option value="">— พิมพ์ชื่อเอง —</option>' +
           activeFunds().map(fd => '<option' + (fundByItem(it.Name) && fundByItem(it.Name).Name === fd.Name ? ' selected' : '') + '>' + esc(fd.Name) + '</option>').join('') + '</select>', 'full') : '') +
       field('ชื่อรายการย่อย', '<input name="Name" value="' + esc(it.Name || '') + '" placeholder="' + (it.Type === PLAN_SAVING_TYPE ? 'ชื่อกอง' : 'เช่น โทรศัพท์เปรม') + '">', 'full') +
-      field('จำนวนต่อเดือน (ค่าตั้งต้นทุกเดือน)', '<input type="number" step="0.01" name="DefaultAmount" value="' + esc(isNew ? '' : it.DefaultAmount) + '">', 'full') +
-      '<p class="full muted small" style="margin:0">ตัวเลขนี้ใช้ทุกเดือน แก้รายเดือนได้ในตาราง · ยอดของหมวด ' + esc(it.Category) + ' จะเท่ากับผลรวมรายการย่อย</p>' +
+      field('จำนวนเงิน (ค่าตั้งต้น)', '<input type="number" step="0.01" name="DefaultAmount" value="' + esc(isNew ? '' : it.DefaultAmount) + '">', 'full') +
+      '<div class="full"><span class="small">จ่ายเดือนไหน</span><div class="seg" style="margin:6px 0">' +
+        '<label><input type="radio" name="pi-when" value="all"' + ((it.Months || []).length ? '' : ' checked') + '> ทุกเดือน</label>' +
+        '<label><input type="radio" name="pi-when" value="some"' + ((it.Months || []).length ? ' checked' : '') + '> เฉพาะเดือนที่เลือก (ทุกปี)</label></div>' +
+        '<div id="pi-months" class="pi-months' + ((it.Months || []).length ? '' : ' hidden') + '">' +
+        TH_MONTHS.map((n, k) => '<label><input type="checkbox" class="pi-m" value="' + (k + 1) + '"' + ((it.Months || []).indexOf(k + 1) >= 0 ? ' checked' : '') + '> ' + n + '</label>').join('') +
+        '</div></div>' +
+      '<p class="full muted small" style="margin:0">ค่าตั้งต้นใช้ในเดือนที่เลือก (เดือนอื่นเป็น 0) แก้รายเดือนได้ในตาราง · เดือนในที่นี้คือรอบเดือน' +
+        (S.boot.cycleStart > 1 ? ' เช่น มี.ค. = ' + cycleRangeLabel(S.boot.today.slice(0, 4) + '-03') : '') + ' · ยอดของหมวด ' + esc(it.Category) + ' จะเท่ากับผลรวมรายการย่อย</p>' +
       (isNew ? '' : '<div class="full"><button type="button" class="btn danger sm" id="pi-del">ลบรายการย่อยนี้</button></div>') + '</div>',
     onOpen: root => {
+      $$('input[name=pi-when]', root).forEach(r => r.addEventListener('change', () => $('#pi-months', root).classList.toggle('hidden', r.value === 'all' && r.checked)));
       const pf = $('#pi-fund', root);
       if (pf) pf.addEventListener('change', () => { if (pf.value) $('input[name=Name]', root).value = pf.value; });
       const del = $('#pi-del', root);
@@ -1743,7 +1752,10 @@ function planItemModal(it) {
     },
     onSubmit: async form => {
       const f = readForm(form);
-      await api('savePlanItem', { ID: it.ID, Type: it.Type, Category: it.Category, Name: f.Name, DefaultAmount: num(f.DefaultAmount) });
+      const some = $('input[name=pi-when]:checked', form).value === 'some';
+      const months = some ? $$('.pi-m', form).filter(c => c.checked).map(c => +c.value) : [];
+      if (some && !months.length) throw new Error('เลือกอย่างน้อย 1 เดือน');
+      await api('savePlanItem', { ID: it.ID, Type: it.Type, Category: it.Category, Name: f.Name, DefaultAmount: num(f.DefaultAmount), Months: months.join(',') });
       S.boot = await api('bootstrap');
       S.txCache = {};
       S.planOpen[it.Type + '|' + it.Category] = true;

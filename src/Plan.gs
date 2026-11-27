@@ -139,10 +139,22 @@ function planOverrides_() {
   return o;
 }
 
+/** "3,9" -> [3, 9] (เดือน 1-12) · ว่าง = ทุกเดือน */
+function parseItemMonths_(v) {
+  const out = [];
+  String(v == null ? '' : v).split(/[^0-9]+/).forEach(x => { const n = Number(x); if (n >= 1 && n <= 12 && out.indexOf(n) < 0) out.push(n); });
+  return out.sort((a, b) => a - b);
+}
+
+/** ค่าตั้งต้นของรายการย่อยในเดือน m (ถ้ากำหนดเฉพาะเดือน เดือนอื่นเป็น 0) */
+function itemDefault_(i, m) {
+  return !i.Months.length || i.Months.indexOf(+m.slice(5, 7)) >= 0 ? i.DefaultAmount : 0;
+}
+
 function planItems_() {
   return readTable_('planItems').filter(i => isActive_(i.Active)).map(i => ({
     ID: String(i.ID), Type: i.Type, Category: String(i.Category), Name: String(i.Name),
-    DefaultAmount: num_(i.DefaultAmount), Order: num_(i.Order),
+    DefaultAmount: num_(i.DefaultAmount), Order: num_(i.Order), Months: parseItemMonths_(i.Months),
   })).sort((a, b) => a.Order - b.Order || a.Name.localeCompare(b.Name));
 }
 
@@ -189,8 +201,8 @@ function buildPlan_(months) {
     const subs = items.filter(i => i.Type === type && i.Category === cat);
     if (!subs.length) return [{ type, category: cat, cells: months.map(m => cell(m, type, cat, defFn(m))) }];
     const subRows = subs.map(i => ({
-      type, category: cat, item: i.Name, itemId: i.ID, sub: true,
-      cells: months.map(m => cell(m, type, cat, i.DefaultAmount, i.Name)),
+      type, category: cat, item: i.Name, itemId: i.ID, sub: true, defaultAmount: i.DefaultAmount, schedule: i.Months,
+      cells: months.map(m => cell(m, type, cat, itemDefault_(i, m), i.Name)),
     }));
     const parent = {
       type, category: cat, hasItems: true,
@@ -314,7 +326,7 @@ function apiSavePlanItem_(i) {
   const all = readTable_('planItems');
   const dup = all.find(r => r.Type === i.Type && String(r.Category) === i.Category && String(r.Name) === name && String(r.ID) !== String(i.ID || ''));
   if (dup) throw new Error('มีรายการย่อยชื่อนี้ในหมวดนี้แล้ว');
-  const row = { Type: i.Type, Category: i.Category, Name: name, DefaultAmount: num_(i.DefaultAmount), Active: true };
+  const row = { Type: i.Type, Category: i.Category, Name: name, DefaultAmount: num_(i.DefaultAmount), Active: true, Months: parseItemMonths_(i.Months).join(',') };
   if (i.ID) {
     const old = all.find(r => String(r.ID) === String(i.ID));
     if (!old) throw new Error('ไม่พบรายการย่อย');
